@@ -1,0 +1,222 @@
+import base64
+import io
+import json
+import os
+import tempfile
+import unittest
+import urllib.parse
+from datetime import timedelta
+from wsgiref.util import setup_testing_defaults
+
+os.environ["BOLAO_SKIP_INIT"] = "1"
+
+import app as bolao
+
+
+TEST_AVATAR = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 64).decode("ascii")
+
+
+class ApiClient:
+    def __init__(self):
+        self.cookie = None
+
+    def request(self, method, path, body=None):
+        parsed = urllib.parse.urlsplit(path)
+        raw_body = b""
+        if body is not None:
+            raw_body = json.dumps(body).encode("utf-8")
+        environ = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            {
+                "REQUEST_METHOD": method,
+                "PATH_INFO": parsed.path,
+                "QUERY_STRING": parsed.query,
+                "CONTENT_LENGTH": str(len(raw_body)),
+                "CONTENT_TYPE": "application/json",
+                "wsgi.input": io.BytesIO(raw_body),
+            }
+        )
+        if self.cookie:
+            environ["HTTP_COOKIE"] = self.cookie
+
+        captured = {}
+
+        def start_response(status, headers, exc_info=None):
+            captured["status"] = int(status.split()[0])
+            captured["headers"] = headers
+            for name, value in headers:
+                if name.lower() == "set-cookie":
+                    self.cookie = value.split(";", 1)[0]
+
+        response_body = b"".join(bolao.application(environ, start_response))
+        content_type = next(
+            (value for name, value in captured["headers"] if name.lower() == "content-type"),
+            "",
+        )
+        if "json" in content_type:
+            data = json.loads(response_body.decode("utf-8"))
+        else:
+            data = response_body.decode("utf-8")
+        return captured["status"], data, dict(captured["headers"])
+
+    def get(self, path):
+        return self.request("GET", path)
+
+    def post(self, path, body=None):
+        return self.request("POST", path, body or {})
+
+
+class ApiTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("RENDER", None)
+        os.environ["SQLITE_PATH"] = os.path.join(self.tmp.name, "test.sqlite3")
+        os.environ["ADMIN_USERNAME"] = "Math"
+        os.environ["ADMIN_PASSWORD"] = "secret123"
+        os.environ["SECRET_KEY"] = "test-secret"
+        bolao.SECRET_KEY = "test-secret"
+        bolao.DB = bolao.Database()
+        bolao.init_db()
+        self.admin = ApiClient()
+        status, data, _ = self.admin.post(
+            "/api/auth/login",
+            {"username": "Math", "password": "secret123"},
+        )
+        self.assertEqual(status, 200, data)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def first_match_id(self):
+        with bolao.DB.connect() as conn:
+            return bolao.DB.one(bolao.DB.execute(conn, "SELECT id FROM matches ORDER BY start_at LIMIT 1"))["id"]
+
+    def set_match_start(self, match_id, when):
+        with bolao.DB.connect() as conn:
+            bolao.DB.execute(
+                conn,
+                "UPDATE matches SET start_at = ?, status = 'agendado', result_home = NULL, result_away = NULL, penalty_winner = NULL WHERE id = ?",
+                (when.isoformat(timespec="minutes"), match_id),
+            )
+            conn.commit()
+
+    def register_player(self, username="Jogador Teste", password="senha123"):
+        client = ApiClient()
+        status, data, _ = client.post(
+            "/api/auth/register",
+            {"username": username, "password": password, "avatar": TEST_AVATAR},
+        )
+        self.assertEqual(status, 201, data)
+        return client, data["user"]
+
+    def test_register_requires_avatar(self):
+        client = ApiClient()
+        status, data, _ = client.post(
+            "/api/auth/register",
+            {"username": "Sem Foto", "password": "senha123"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(data["code"], "cadastro_invalido")
+
+    def test_prediction_locks_at_start_and_reveals_after_five_minutes(self):
+        player, _ = self.register_player()
+        match_id = self.first_match_id()
+        self.set_match_start(match_id, bolao.now_brasilia() + timedelta(hours=2))
+
+        status, data, _ = player.post(f"/api/predictions/{match_id}", {"home_score": 2, "away_score": 1})
+        self.assertEqual(status, 200, data)
+
+        self.set_match_start(match_id, bolao.now_brasilia() - timedelta(minutes=1))
+        status, data, _ = player.post(f"/api/predictions/{match_id}", {"home_score": 1, "away_score": 1})
+        self.assertEqual(status, 409)
+        self.assertEqual(data["code"], "palpite_fechado")
+
+        status, data, _ = player.get(f"/api/matches/{match_id}/predictions")
+        self.assertEqual(status, 403)
+        self.assertEqual(data["code"], "palpites_ocultos")
+
+        self.set_match_start(match_id, bolao.now_brasilia() - timedelta(minutes=6))
+        status, data, _ = player.get(f"/api/matches/{match_id}/predictions")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(len(data["predictions"]), 1)
+
+    def test_result_edit_recalculates_ranking_and_records_audit(self):
+        player, user = self.register_player()
+        match_id = self.first_match_id()
+        self.set_match_start(match_id, bolao.now_brasilia() + timedelta(hours=2))
+        player.post(f"/api/predictions/{match_id}", {"home_score": 2, "away_score": 1})
+
+        status, data, _ = self.admin.post(
+            f"/api/admin/matches/{match_id}/result",
+            {"result_home": 2, "result_away": 1},
+        )
+        self.assertEqual(status, 200, data)
+        status, data, _ = self.admin.get("/api/ranking")
+        player_rank = next(row for row in data["ranking"] if row["id"] == user["id"])
+        self.assertEqual(player_rank["points"], 6)
+
+        status, data, _ = self.admin.post(
+            f"/api/admin/matches/{match_id}/result",
+            {"result_home": 3, "result_away": 1},
+        )
+        self.assertEqual(status, 200, data)
+        status, data, _ = self.admin.get("/api/ranking")
+        player_rank = next(row for row in data["ranking"] if row["id"] == user["id"])
+        self.assertEqual(player_rank["points"], 4)
+
+        status, data, _ = self.admin.get("/api/admin/result-audits")
+        self.assertEqual(status, 200, data)
+        self.assertGreaterEqual(len(data["audits"]), 2)
+        self.assertEqual(data["audits"][0]["action"], "save_result")
+
+    def test_admin_can_rename_reset_password_and_disable_user(self):
+        _, user = self.register_player("Carlos", "senha123")
+
+        status, data, _ = self.admin.post(f"/api/admin/users/{user['id']}/rename", {"username": "Carlos Novo"})
+        self.assertEqual(status, 200, data)
+        self.assertTrue(any(row["username"] == "Carlos Novo" for row in data["users"]))
+
+        status, data, _ = self.admin.post(
+            f"/api/admin/users/{user['id']}/reset-password",
+            {"password": "nova123"},
+        )
+        self.assertEqual(status, 200, data)
+
+        status, data, _ = self.admin.post(f"/api/admin/users/{user['id']}/active", {"active": False})
+        self.assertEqual(status, 200, data)
+        inactive_login = ApiClient()
+        status, data, _ = inactive_login.post(
+            "/api/auth/login",
+            {"username": "Carlos Novo", "password": "nova123"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(data["code"], "conta_desativada")
+
+        self.admin.post(f"/api/admin/users/{user['id']}/active", {"active": True})
+        active_login = ApiClient()
+        status, data, _ = active_login.post(
+            "/api/auth/login",
+            {"username": "Carlos Novo", "password": "nova123"},
+        )
+        self.assertEqual(status, 200, data)
+
+    def test_admin_exports_json_and_csv(self):
+        self.register_player("Exportador", "senha123")
+        status, data, _ = self.admin.get("/api/admin/export/json")
+        self.assertEqual(status, 200, data)
+        self.assertIn("users", data)
+        self.assertIn("matches", data)
+        self.assertIn("predictions", data)
+        self.assertIn("ranking", data)
+
+        status, data, headers = self.admin.get("/api/admin/export/csv")
+        self.assertEqual(status, 200, data)
+        self.assertIn("text/csv", headers["Content-Type"])
+        self.assertIn("section", data)
+        self.assertIn("ranking", data)
+
+
+if __name__ == "__main__":
+    unittest.main()

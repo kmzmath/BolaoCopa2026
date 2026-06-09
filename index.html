@@ -3,7 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101214" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Bolão Copa 2026</title>
+    <link rel="manifest" href="/static/manifest.webmanifest" />
+    <link rel="icon" href="/static/mark.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/static/mark.svg" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script defer src="/static/app.js"></script>
   </head>
@@ -34,6 +40,19 @@
             <span>Senha</span>
             <input id="auth-password" name="password" type="password" autocomplete="current-password" required />
           </label>
+          <div id="auth-avatar-field" class="auth-avatar-field hidden">
+            <div class="profile-preview">
+              <span id="auth-avatar-preview" class="avatar avatar-large"></span>
+              <div>
+                <strong>Foto de perfil</strong>
+                <span>Obrigatória para criar conta.</span>
+              </div>
+            </div>
+            <label>
+              <span>Escolher foto</span>
+              <input id="auth-photo" type="file" accept="image/png,image/jpeg,image/webp" />
+            </label>
+          </div>
           <button type="submit" class="primary-action">
             <span aria-hidden="true">✓</span>
             <span id="auth-submit-label">Entrar</span>
@@ -64,7 +83,7 @@
         <button type="button" class="main-tab active" data-tab="predictions">Palpites</button>
         <button type="button" class="main-tab" data-tab="ranking">Ranking</button>
         <button type="button" class="main-tab" data-tab="profile">Perfil</button>
-        <button type="button" class="main-tab" data-tab="rules">Pontuação</button>
+        <button type="button" class="main-tab" data-tab="rules">Regras</button>
         <button type="button" class="main-tab admin-only hidden" data-tab="admin">Admin</button>
       </nav>
 
@@ -75,6 +94,7 @@
               <h2>Palpites</h2>
               <p id="server-clock"></p>
             </div>
+            <div id="missing-counter" class="missing-counter"></div>
             <button type="button" id="refresh-button" class="icon-action" title="Atualizar">
               <span aria-hidden="true">↻</span>
             </button>
@@ -82,6 +102,7 @@
 
           <div class="scope-tabs" role="tablist" aria-label="Lista de jogos">
             <button type="button" class="scope-tab active" data-scope="upcoming">Próximas 24hrs</button>
+            <button type="button" class="scope-tab" data-scope="missing">Faltam palpites</button>
             <button type="button" class="scope-tab" data-scope="all">Todos os jogos</button>
           </div>
 
@@ -174,6 +195,25 @@
               <p>Salvar ou corrigir resultados recalcula o ranking.</p>
             </div>
           </div>
+          <div class="admin-tools">
+            <section class="admin-export">
+              <div>
+                <strong>Exportação</strong>
+                <span>Baixe usuários, palpites, resultados, ranking e auditoria.</span>
+              </div>
+              <div class="actions-row">
+                <button type="button" class="small-action export-data" data-export-format="json">JSON</button>
+                <button type="button" class="small-action export-data" data-export-format="csv">CSV</button>
+              </div>
+            </section>
+            <div class="admin-tabs" role="tablist" aria-label="Administração">
+              <button type="button" class="admin-tab active" data-admin-view="results">Resultados</button>
+              <button type="button" class="admin-tab" data-admin-view="users">Usuários</button>
+              <button type="button" class="admin-tab" data-admin-view="audit">Auditoria</button>
+            </div>
+          </div>
+          <div id="admin-users" class="admin-users hidden"></div>
+          <div id="admin-audit" class="admin-audit hidden"></div>
           <div id="admin-list" class="match-list"></div>
         </section>
       </main>

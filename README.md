@@ -5,6 +5,7 @@ Site mobile-first para bolão entre amigos, com cadastro por usuário/senha, pal
 ## O que está implementado
 
 - Cadastro e login por nome de usuário e senha.
+- Foto de perfil obrigatória na criação de conta.
 - Admin criado por variáveis de ambiente.
 - Calendário importado de `data/copa_do_mundo_2026_jogos_horario_brasilia.csv`.
 - Horários em `America/Sao_Paulo` e bloqueio de palpites no instante de início da partida.
@@ -12,6 +13,11 @@ Site mobile-first para bolão entre amigos, com cadastro por usuário/senha, pal
 - Palpites de outros usuários ocultos até 5 minutos após o início do jogo.
 - Pontuação automática ao encerrar ou editar resultado.
 - Perfil com foto do jogador.
+- Visão de jogos sem palpite e contador de pendências no topo.
+- Exportação admin em JSON/CSV com usuários, palpites, resultados, ranking e auditoria.
+- Administração de usuários: renomear, resetar senha e ativar/desativar conta.
+- Auditoria de resultados com admin responsável, data, placar anterior e placar novo.
+- PWA básico para adicionar o site à tela inicial do celular.
 - Ranking com posição, foto, jogador, palpites realizados, pontos e estatísticas por tipo de acerto.
 - Mata-mata com escolha obrigatória de classificado quando o palpite for empate.
 - Resolução automática de vencedores/perdedores de partidas anteriores e posições de grupos quando os resultados estiverem completos.

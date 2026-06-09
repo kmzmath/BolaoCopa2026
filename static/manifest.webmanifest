@@ -1,0 +1,19 @@
+{
+  "name": "Bolao Copa 2026",
+  "short_name": "Bolao 2026",
+  "description": "Palpites, resultados e ranking do bolao da Copa 2026.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#101214",
+  "theme_color": "#101214",
+  "icons": [
+    {
+      "src": "/static/mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

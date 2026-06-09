@@ -2,6 +2,7 @@ import base64
 import csv
 import hashlib
 import hmac
+import io
 import json
 import mimetypes
 import os
@@ -118,6 +119,7 @@ def init_db():
                     username_norm TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
                     avatar_mime TEXT,
                     avatar_data TEXT,
                     created_at TEXT NOT NULL
@@ -172,6 +174,7 @@ def init_db():
                     username_norm TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     is_admin INTEGER NOT NULL DEFAULT 0,
+                    active INTEGER NOT NULL DEFAULT 1,
                     avatar_mime TEXT,
                     avatar_data TEXT,
                     created_at TEXT NOT NULL
@@ -220,22 +223,79 @@ def init_db():
         DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_matches_start ON matches(start_at)")
         DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_predictions_user ON predictions(user_id)")
         DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id)")
-        ensure_user_avatar_columns(conn)
+        ensure_user_columns(conn)
+        ensure_result_audit_table(conn)
         seed_matches_if_needed(conn)
         ensure_admin_user(conn)
         conn.commit()
 
 
-def ensure_user_avatar_columns(conn):
+def ensure_user_columns(conn):
     if DB.is_postgres:
+        DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE")
         DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT")
         DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data TEXT")
         return
     columns = {row["name"] for row in DB.rows(DB.execute(conn, "PRAGMA table_info(users)"))}
+    if "active" not in columns:
+        DB.execute(conn, "ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
     if "avatar_mime" not in columns:
         DB.execute(conn, "ALTER TABLE users ADD COLUMN avatar_mime TEXT")
     if "avatar_data" not in columns:
         DB.execute(conn, "ALTER TABLE users ADD COLUMN avatar_data TEXT")
+
+
+def ensure_result_audit_table(conn):
+    if DB.is_postgres:
+        DB.execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS result_audits (
+                id SERIAL PRIMARY KEY,
+                match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                admin_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                admin_username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                old_result_home INTEGER,
+                old_result_away INTEGER,
+                old_penalty_winner TEXT,
+                old_status TEXT,
+                old_closed_at TEXT,
+                new_result_home INTEGER,
+                new_result_away INTEGER,
+                new_penalty_winner TEXT,
+                new_status TEXT,
+                new_closed_at TEXT,
+                changed_at TEXT NOT NULL
+            )
+            """,
+        )
+    else:
+        DB.execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS result_audits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                admin_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                admin_username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                old_result_home INTEGER,
+                old_result_away INTEGER,
+                old_penalty_winner TEXT,
+                old_status TEXT,
+                old_closed_at TEXT,
+                new_result_home INTEGER,
+                new_result_away INTEGER,
+                new_penalty_winner TEXT,
+                new_status TEXT,
+                new_closed_at TEXT,
+                changed_at TEXT NOT NULL
+            )
+            """,
+        )
+    DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_result_audits_match ON result_audits(match_id)")
+    DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_result_audits_changed ON result_audits(changed_at)")
 
 
 def normalize_phase(raw_phase):
@@ -293,30 +353,30 @@ def ensure_admin_user(conn):
     admin_username = os.getenv("ADMIN_USERNAME", "Math").strip() or "Math"
     admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
     norm = normalize_username(admin_username)
-    existing = DB.one(DB.execute(conn, "SELECT id, is_admin FROM users WHERE username_norm = ?", (norm,)))
+    existing = DB.one(DB.execute(conn, "SELECT id, is_admin, active FROM users WHERE username_norm = ?", (norm,)))
     if existing:
-        if not boolish(existing["is_admin"]):
-            DB.execute(conn, "UPDATE users SET is_admin = ? WHERE id = ?", (True, existing["id"]))
+        if not boolish(existing["is_admin"]) or not boolish(existing.get("active", True)):
+            DB.execute(conn, "UPDATE users SET is_admin = ?, active = ? WHERE id = ?", (True, True, existing["id"]))
         return
     legacy_norm = normalize_username("admin")
     if norm != legacy_norm:
         legacy_admin = DB.one(
-            DB.execute(conn, "SELECT id, is_admin FROM users WHERE username_norm = ?", (legacy_norm,))
+            DB.execute(conn, "SELECT id, is_admin, active FROM users WHERE username_norm = ?", (legacy_norm,))
         )
         if legacy_admin and boolish(legacy_admin["is_admin"]):
             DB.execute(
                 conn,
-                "UPDATE users SET username = ?, username_norm = ?, is_admin = ? WHERE id = ?",
-                (admin_username, norm, True, legacy_admin["id"]),
+                "UPDATE users SET username = ?, username_norm = ?, is_admin = ?, active = ? WHERE id = ?",
+                (admin_username, norm, True, True, legacy_admin["id"]),
             )
             return
     DB.execute(
         conn,
         """
-        INSERT INTO users (username, username_norm, password_hash, is_admin, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO users (username, username_norm, password_hash, is_admin, active, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (admin_username, norm, hash_password(admin_password), True, iso_now()),
+        (admin_username, norm, hash_password(admin_password), True, True, iso_now()),
     )
 
 
@@ -410,13 +470,15 @@ def send(start_response, body, status=200, content_type="application/json; chars
         raw = body.encode("utf-8")
     else:
         raw = body
-    headers.extend(
-        [
-            ("Content-Type", content_type),
-            ("Content-Length", str(len(raw))),
-            ("Cache-Control", "no-store" if content_type.startswith("application/json") else "public, max-age=3600"),
-        ]
-    )
+    header_names = {name.lower() for name, _ in headers}
+    if "content-type" not in header_names:
+        headers.append(("Content-Type", content_type))
+    if "content-length" not in header_names:
+        headers.append(("Content-Length", str(len(raw))))
+    if "cache-control" not in header_names:
+        private_download = any(name.lower() == "content-disposition" for name, _ in headers)
+        no_store = content_type.startswith("application/json") or private_download
+        headers.append(("Cache-Control", "no-store" if no_store else "public, max-age=3600"))
     start_response(status_line(status), headers)
     return [raw]
 
@@ -448,12 +510,15 @@ def current_user(req):
         user = DB.one(
             DB.execute(
                 conn,
-                "SELECT id, username, username_norm, is_admin, avatar_mime, avatar_data, created_at FROM users WHERE id = ?",
+                "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_data, created_at FROM users WHERE id = ?",
                 (user_id,),
             )
         )
     if user:
         user["is_admin"] = boolish(user["is_admin"])
+        user["active"] = boolish(user.get("active", True))
+        if not user["active"]:
+            return None
     return user
 
 
@@ -480,6 +545,7 @@ def public_user(user):
         "id": user["id"],
         "username": user["username"],
         "is_admin": boolish(user["is_admin"]),
+        "active": boolish(user.get("active", True)),
         "avatar_url": avatar_url(user),
     }
 
@@ -817,12 +883,29 @@ def parse_score(value, field_name):
     return score
 
 
-def create_user(username, password):
+def validate_username(username):
     username = re.sub(r"\s+", " ", (username or "").strip())
+    if len(username) < 3 or len(username) > 40:
+        raise ValueError("O nome de usuÃ¡rio deve ter entre 3 e 40 caracteres.")
+    if not re.fullmatch(r"[\w\u00C0-\u00FF .'-]+", username):
+        raise ValueError("Use apenas letras, nÃºmeros, espaÃ§os, ponto, hÃ­fen ou apÃ³strofo no nome.")
+    return username
+
+
+def validate_password(password):
     password = password or ""
+    if len(password) < 6:
+        raise ValueError("A senha deve ter pelo menos 6 caracteres.")
+    return password
+
+
+def create_user(username, password, avatar):
+    username = validate_username(username)
+    password = validate_password(password)
+    avatar_mime, avatar_data = parse_avatar_data_url(avatar)
     if len(username) < 3 or len(username) > 40:
         raise ValueError("O nome de usuário deve ter entre 3 e 40 caracteres.")
-    if not re.fullmatch(r"[\wÀ-ÿ .'-]+", username):
+    if not re.fullmatch(r"[\w\u00C0-\u00FF .'-]+", username):
         raise ValueError("Use apenas letras, números, espaços, ponto, hífen ou apóstrofo no nome.")
     if len(password) < 6:
         raise ValueError("A senha deve ter pelo menos 6 caracteres.")
@@ -832,10 +915,22 @@ def create_user(username, password):
             DB.execute(
                 conn,
                 """
-                INSERT INTO users (username, username_norm, password_hash, is_admin, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (
+                    username, username_norm, password_hash, is_admin, active,
+                    avatar_mime, avatar_data, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (username, normalize_username(username), hash_password(password), False, iso_now()),
+                (
+                    username,
+                    normalize_username(username),
+                    hash_password(password),
+                    False,
+                    True,
+                    avatar_mime,
+                    avatar_data,
+                    iso_now(),
+                ),
             )
             conn.commit()
         except Exception as exc:
@@ -846,7 +941,7 @@ def create_user(username, password):
         return DB.one(
             DB.execute(
                 conn,
-                "SELECT id, username, username_norm, is_admin, avatar_mime, avatar_data, created_at FROM users WHERE username_norm = ?",
+                "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_data, created_at FROM users WHERE username_norm = ?",
                 (normalize_username(username),),
             )
         )
@@ -856,11 +951,12 @@ def handle_auth(req, start_response):
     if req.path == "/api/auth/register" and req.method == "POST":
         try:
             body = req.json()
-            user = create_user(body.get("username"), body.get("password"))
+            user = create_user(body.get("username"), body.get("password"), body.get("avatar"))
         except ValueError as exc:
             return json_error(start_response, str(exc), 400, "cadastro_invalido")
         token = make_session(user["id"])
         user["is_admin"] = boolish(user["is_admin"])
+        user["active"] = boolish(user.get("active", True))
         return json_response(
             start_response,
             {"ok": True, "user": public_user(user), "message": "Conta criada."},
@@ -877,6 +973,9 @@ def handle_auth(req, start_response):
         if not user or not verify_password(password, user["password_hash"]):
             return json_error(start_response, "Usuário ou senha inválidos.", 401, "login_invalido")
         user["is_admin"] = boolish(user["is_admin"])
+        user["active"] = boolish(user.get("active", True))
+        if not user["active"]:
+            return json_error(start_response, "Esta conta foi desativada pelo administrador.", 403, "conta_desativada")
         return json_response(
             start_response,
             {"ok": True, "user": public_user(user), "message": "Login realizado."},
@@ -887,6 +986,353 @@ def handle_auth(req, start_response):
         return json_response(start_response, {"ok": True}, headers=[clear_session_cookie()])
 
     return None
+
+
+def build_ranking(conn):
+    rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                u.id,
+                u.username,
+                u.active,
+                u.avatar_mime,
+                u.avatar_data,
+                COUNT(p.id) AS prediction_count,
+                COALESCE(SUM(p.points), 0) AS points
+            FROM users u
+            LEFT JOIN predictions p ON p.user_id = u.id
+            GROUP BY u.id, u.username, u.active, u.avatar_mime, u.avatar_data
+            ORDER BY points DESC, prediction_count DESC, u.username ASC
+            """,
+        )
+    )
+    scoring_rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                p.user_id,
+                p.home_score,
+                p.away_score,
+                p.advances,
+                m.phase_slug,
+                m.result_home,
+                m.result_away,
+                m.penalty_winner
+            FROM predictions p
+            JOIN matches m ON m.id = p.match_id
+            WHERE m.result_home IS NOT NULL AND m.result_away IS NOT NULL
+            """,
+        )
+    )
+    stats_by_user = build_ranking_breakdown(scoring_rows)
+    ranking = []
+    for index, row in enumerate(rows, start=1):
+        ranking.append(
+            {
+                "position": index,
+                "id": row["id"],
+                "username": row["username"],
+                "active": boolish(row.get("active", True)),
+                "avatar_url": avatar_url(row),
+                "prediction_count": int(row["prediction_count"] or 0),
+                "points": int(row["points"] or 0),
+                "breakdown": stats_by_user.get(row["id"], empty_breakdown()),
+            }
+        )
+    return ranking
+
+
+def build_admin_users(conn):
+    rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                u.id,
+                u.username,
+                u.is_admin,
+                u.active,
+                u.avatar_mime,
+                u.avatar_data,
+                u.created_at,
+                COUNT(p.id) AS prediction_count,
+                COALESCE(SUM(p.points), 0) AS points
+            FROM users u
+            LEFT JOIN predictions p ON p.user_id = u.id
+            GROUP BY u.id, u.username, u.is_admin, u.active, u.avatar_mime, u.avatar_data, u.created_at
+            ORDER BY u.username ASC
+            """,
+        )
+    )
+    return [
+        {
+            "id": row["id"],
+            "username": row["username"],
+            "is_admin": boolish(row["is_admin"]),
+            "active": boolish(row.get("active", True)),
+            "avatar_url": avatar_url(row),
+            "created_at": row["created_at"],
+            "prediction_count": int(row["prediction_count"] or 0),
+            "points": int(row["points"] or 0),
+        }
+        for row in rows
+    ]
+
+
+def record_result_audit(conn, old_match, new_values, admin_user, action):
+    DB.execute(
+        conn,
+        """
+        INSERT INTO result_audits (
+            match_id, admin_user_id, admin_username, action,
+            old_result_home, old_result_away, old_penalty_winner, old_status, old_closed_at,
+            new_result_home, new_result_away, new_penalty_winner, new_status, new_closed_at,
+            changed_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            old_match["id"],
+            admin_user["id"],
+            admin_user["username"],
+            action,
+            old_match.get("result_home"),
+            old_match.get("result_away"),
+            old_match.get("penalty_winner"),
+            old_match.get("status"),
+            old_match.get("closed_at"),
+            new_values.get("result_home"),
+            new_values.get("result_away"),
+            new_values.get("penalty_winner"),
+            new_values.get("status"),
+            new_values.get("closed_at"),
+            iso_now(),
+        ),
+    )
+
+
+def fetch_result_audits(conn, limit=100):
+    rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                a.*,
+                m.fifa_number,
+                m.phase,
+                m.group_code,
+                m.round_label,
+                m.team_a,
+                m.team_b,
+                m.start_at
+            FROM result_audits a
+            JOIN matches m ON m.id = a.match_id
+            ORDER BY a.changed_at DESC, a.id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+    )
+    return [
+        {
+            "id": row["id"],
+            "match_id": row["match_id"],
+            "fifa_number": row["fifa_number"],
+            "phase": row["phase"],
+            "group_code": row.get("group_code"),
+            "round_label": row.get("round_label"),
+            "team_a": row["team_a"],
+            "team_b": row["team_b"],
+            "start_at": row["start_at"],
+            "admin_user_id": row.get("admin_user_id"),
+            "admin_username": row["admin_username"],
+            "action": row["action"],
+            "old_result_home": row.get("old_result_home"),
+            "old_result_away": row.get("old_result_away"),
+            "old_penalty_winner": row.get("old_penalty_winner"),
+            "old_status": row.get("old_status"),
+            "old_closed_at": row.get("old_closed_at"),
+            "new_result_home": row.get("new_result_home"),
+            "new_result_away": row.get("new_result_away"),
+            "new_penalty_winner": row.get("new_penalty_winner"),
+            "new_status": row.get("new_status"),
+            "new_closed_at": row.get("new_closed_at"),
+            "changed_at": row["changed_at"],
+        }
+        for row in rows
+    ]
+
+
+def build_export_payload(conn):
+    users = build_admin_users(conn)
+    ranking = build_ranking(conn)
+    matches = DB.rows(DB.execute(conn, "SELECT * FROM matches ORDER BY start_at ASC, fifa_number ASC"))
+    predictions = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                p.id,
+                p.user_id,
+                u.username,
+                p.match_id,
+                m.fifa_number,
+                m.phase,
+                m.group_code,
+                m.round_label,
+                m.team_a,
+                m.team_b,
+                m.start_at,
+                p.home_score,
+                p.away_score,
+                p.advances,
+                p.points,
+                p.updated_at
+            FROM predictions p
+            JOIN users u ON u.id = p.user_id
+            JOIN matches m ON m.id = p.match_id
+            ORDER BY u.username ASC, m.start_at ASC
+            """,
+        )
+    )
+    audits = fetch_result_audits(conn, limit=10000)
+    return {
+        "generated_at": iso_now(),
+        "users": users,
+        "matches": matches,
+        "predictions": predictions,
+        "ranking": ranking,
+        "result_audits": audits,
+    }
+
+
+def export_payload_as_csv(payload):
+    output = io.StringIO()
+    fieldnames = [
+        "section",
+        "user_id",
+        "username",
+        "is_admin",
+        "active",
+        "created_at",
+        "ranking_position",
+        "prediction_count",
+        "points",
+        "match_id",
+        "fifa_number",
+        "phase",
+        "group_code",
+        "round_label",
+        "team_a",
+        "team_b",
+        "start_at",
+        "status",
+        "result_home",
+        "result_away",
+        "penalty_winner",
+        "prediction_home",
+        "prediction_away",
+        "prediction_advances",
+        "prediction_points",
+        "prediction_updated_at",
+        "audit_action",
+        "audit_admin",
+        "audit_changed_at",
+        "audit_old_result",
+        "audit_new_result",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    ranking_by_user = {row["id"]: row for row in payload["ranking"]}
+    for user in payload["users"]:
+        rank = ranking_by_user.get(user["id"], {})
+        writer.writerow(
+            {
+                "section": "users",
+                "user_id": user["id"],
+                "username": user["username"],
+                "is_admin": user["is_admin"],
+                "active": user["active"],
+                "created_at": user["created_at"],
+                "ranking_position": rank.get("position"),
+                "prediction_count": user["prediction_count"],
+                "points": user["points"],
+            }
+        )
+    for rank in payload["ranking"]:
+        writer.writerow(
+            {
+                "section": "ranking",
+                "user_id": rank["id"],
+                "username": rank["username"],
+                "active": rank["active"],
+                "ranking_position": rank["position"],
+                "prediction_count": rank["prediction_count"],
+                "points": rank["points"],
+            }
+        )
+    for match in payload["matches"]:
+        writer.writerow(
+            {
+                "section": "matches",
+                "match_id": match["id"],
+                "fifa_number": match["fifa_number"],
+                "phase": match["phase"],
+                "group_code": match.get("group_code"),
+                "round_label": match.get("round_label"),
+                "team_a": match["team_a"],
+                "team_b": match["team_b"],
+                "start_at": match["start_at"],
+                "status": match["status"],
+                "result_home": match.get("result_home"),
+                "result_away": match.get("result_away"),
+                "penalty_winner": match.get("penalty_winner"),
+            }
+        )
+    for prediction in payload["predictions"]:
+        writer.writerow(
+            {
+                "section": "predictions",
+                "user_id": prediction["user_id"],
+                "username": prediction["username"],
+                "match_id": prediction["match_id"],
+                "fifa_number": prediction["fifa_number"],
+                "phase": prediction["phase"],
+                "group_code": prediction.get("group_code"),
+                "round_label": prediction.get("round_label"),
+                "team_a": prediction["team_a"],
+                "team_b": prediction["team_b"],
+                "start_at": prediction["start_at"],
+                "prediction_home": prediction["home_score"],
+                "prediction_away": prediction["away_score"],
+                "prediction_advances": prediction.get("advances"),
+                "prediction_points": prediction["points"],
+                "prediction_updated_at": prediction["updated_at"],
+            }
+        )
+    for audit in payload["result_audits"]:
+        writer.writerow(
+            {
+                "section": "result_audits",
+                "match_id": audit["match_id"],
+                "fifa_number": audit["fifa_number"],
+                "phase": audit["phase"],
+                "group_code": audit.get("group_code"),
+                "round_label": audit.get("round_label"),
+                "team_a": audit["team_a"],
+                "team_b": audit["team_b"],
+                "start_at": audit["start_at"],
+                "audit_action": audit["action"],
+                "audit_admin": audit["admin_username"],
+                "audit_changed_at": audit["changed_at"],
+                "audit_old_result": f"{audit.get('old_result_home')}x{audit.get('old_result_away')} {audit.get('old_penalty_winner') or ''}".strip(),
+                "audit_new_result": f"{audit.get('new_result_home')}x{audit.get('new_result_away')} {audit.get('new_penalty_winner') or ''}".strip(),
+            }
+        )
+    return output.getvalue()
 
 
 def handle_api(req, start_response):
@@ -919,11 +1365,12 @@ def handle_api(req, start_response):
             updated = DB.one(
                 DB.execute(
                     conn,
-                    "SELECT id, username, username_norm, is_admin, avatar_mime, avatar_data, created_at FROM users WHERE id = ?",
+                    "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_data, created_at FROM users WHERE id = ?",
                     (user["id"],),
                 )
             )
         updated["is_admin"] = boolish(updated["is_admin"])
+        updated["active"] = boolish(updated.get("active", True))
         return json_response(start_response, {"ok": True, "user": public_user(updated), "message": "Perfil atualizado."})
 
     if req.path == "/api/matches" and req.method == "GET":
@@ -947,58 +1394,121 @@ def handle_api(req, start_response):
 
     if req.path == "/api/ranking" and req.method == "GET":
         with DB.connect() as conn:
-            rows = DB.rows(
-                DB.execute(
-                    conn,
-                    """
-                    SELECT
-                        u.id,
-                        u.username,
-                        u.avatar_mime,
-                        u.avatar_data,
-                        COUNT(p.id) AS prediction_count,
-                        COALESCE(SUM(p.points), 0) AS points
-                    FROM users u
-                    LEFT JOIN predictions p ON p.user_id = u.id
-                    GROUP BY u.id, u.username, u.avatar_mime, u.avatar_data
-                    ORDER BY points DESC, prediction_count DESC, u.username ASC
-                    """
-                )
-            )
-            scoring_rows = DB.rows(
-                DB.execute(
-                    conn,
-                    """
-                    SELECT
-                        p.user_id,
-                        p.home_score,
-                        p.away_score,
-                        p.advances,
-                        m.phase_slug,
-                        m.result_home,
-                        m.result_away,
-                        m.penalty_winner
-                    FROM predictions p
-                    JOIN matches m ON m.id = p.match_id
-                    WHERE m.result_home IS NOT NULL AND m.result_away IS NOT NULL
-                    """
-                )
-            )
-        stats_by_user = build_ranking_breakdown(scoring_rows)
-        ranking = []
-        for index, row in enumerate(rows, start=1):
-            ranking.append(
-                {
-                    "position": index,
-                    "id": row["id"],
-                    "username": row["username"],
-                    "avatar_url": avatar_url(row),
-                    "prediction_count": int(row["prediction_count"] or 0),
-                    "points": int(row["points"] or 0),
-                    "breakdown": stats_by_user.get(row["id"], empty_breakdown()),
-                }
-            )
+            ranking = build_ranking(conn)
         return json_response(start_response, {"ok": True, "ranking": ranking})
+
+    if req.path == "/api/admin/users" and req.method == "GET":
+        _, error = require_admin(req, start_response)
+        if error:
+            return error
+        with DB.connect() as conn:
+            users = build_admin_users(conn)
+        return json_response(start_response, {"ok": True, "users": users})
+
+    rename_user = re.fullmatch(r"/api/admin/users/(\d+)/rename", req.path)
+    if rename_user and req.method == "POST":
+        _, error = require_admin(req, start_response)
+        if error:
+            return error
+        user_id = int(rename_user.group(1))
+        body = req.json()
+        try:
+            username = validate_username(body.get("username"))
+        except ValueError as exc:
+            return json_error(start_response, str(exc), 400, "usuario_invalido")
+        with DB.connect() as conn:
+            target = DB.one(DB.execute(conn, "SELECT id FROM users WHERE id = ?", (user_id,)))
+            if not target:
+                return json_error(start_response, "UsuÃ¡rio nÃ£o encontrado.", 404, "usuario_nao_encontrado")
+            try:
+                DB.execute(
+                    conn,
+                    "UPDATE users SET username = ?, username_norm = ? WHERE id = ?",
+                    (username, normalize_username(username), user_id),
+                )
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
+                    return json_error(start_response, "Esse nome de usuÃ¡rio jÃ¡ existe.", 409, "usuario_duplicado")
+                raise
+            users = build_admin_users(conn)
+        return json_response(start_response, {"ok": True, "users": users, "message": "UsuÃ¡rio renomeado."})
+
+    reset_user = re.fullmatch(r"/api/admin/users/(\d+)/reset-password", req.path)
+    if reset_user and req.method == "POST":
+        _, error = require_admin(req, start_response)
+        if error:
+            return error
+        user_id = int(reset_user.group(1))
+        body = req.json()
+        try:
+            password = validate_password(body.get("password"))
+        except ValueError as exc:
+            return json_error(start_response, str(exc), 400, "senha_invalida")
+        with DB.connect() as conn:
+            target = DB.one(DB.execute(conn, "SELECT id FROM users WHERE id = ?", (user_id,)))
+            if not target:
+                return json_error(start_response, "UsuÃ¡rio nÃ£o encontrado.", 404, "usuario_nao_encontrado")
+            DB.execute(conn, "UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
+            conn.commit()
+        return json_response(start_response, {"ok": True, "message": "Senha redefinida."})
+
+    active_user = re.fullmatch(r"/api/admin/users/(\d+)/active", req.path)
+    if active_user and req.method == "POST":
+        admin, error = require_admin(req, start_response)
+        if error:
+            return error
+        user_id = int(active_user.group(1))
+        body = req.json()
+        active = boolish(body.get("active"))
+        if user_id == admin["id"] and not active:
+            return json_error(start_response, "VocÃª nÃ£o pode desativar sua prÃ³pria conta.", 400, "auto_desativar")
+        with DB.connect() as conn:
+            target = DB.one(DB.execute(conn, "SELECT id FROM users WHERE id = ?", (user_id,)))
+            if not target:
+                return json_error(start_response, "UsuÃ¡rio nÃ£o encontrado.", 404, "usuario_nao_encontrado")
+            DB.execute(conn, "UPDATE users SET active = ? WHERE id = ?", (active, user_id))
+            conn.commit()
+            users = build_admin_users(conn)
+        return json_response(
+            start_response,
+            {"ok": True, "users": users, "message": "Conta ativada." if active else "Conta desativada."},
+        )
+
+    if req.path == "/api/admin/result-audits" and req.method == "GET":
+        _, error = require_admin(req, start_response)
+        if error:
+            return error
+        with DB.connect() as conn:
+            audits = fetch_result_audits(conn)
+        return json_response(start_response, {"ok": True, "audits": audits})
+
+    if req.path == "/api/admin/export/json" and req.method == "GET":
+        _, error = require_admin(req, start_response)
+        if error:
+            return error
+        with DB.connect() as conn:
+            payload = build_export_payload(conn)
+        return send(
+            start_response,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            content_type="application/json; charset=utf-8",
+            headers=[("Content-Disposition", 'attachment; filename="bolao-copa-2026-export.json"')],
+        )
+
+    if req.path == "/api/admin/export/csv" and req.method == "GET":
+        _, error = require_admin(req, start_response)
+        if error:
+            return error
+        with DB.connect() as conn:
+            payload = build_export_payload(conn)
+        return send(
+            start_response,
+            export_payload_as_csv(payload),
+            content_type="text/csv; charset=utf-8",
+            headers=[("Content-Disposition", 'attachment; filename="bolao-copa-2026-export.csv"')],
+        )
 
     public_match = re.fullmatch(r"/api/matches/(\d+)/predictions", req.path)
     if public_match and req.method == "GET":
@@ -1121,6 +1631,20 @@ def handle_api(req, start_response):
             except ValueError as exc:
                 return json_error(start_response, str(exc), 400, "resultado_invalido")
 
+            closed_at = iso_now()
+            record_result_audit(
+                conn,
+                match,
+                {
+                    "result_home": home,
+                    "result_away": away,
+                    "penalty_winner": penalty_winner,
+                    "status": "encerrado",
+                    "closed_at": closed_at,
+                },
+                user,
+                "save_result",
+            )
             DB.execute(
                 conn,
                 """
@@ -1129,7 +1653,7 @@ def handle_api(req, start_response):
                     status = 'encerrado', closed_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (home, away, penalty_winner, iso_now(), iso_now(), match_id),
+                (home, away, penalty_winner, closed_at, closed_at, match_id),
             )
             summary = recalc_match_points(conn, match_id)
             conn.commit()
@@ -1145,12 +1669,27 @@ def handle_api(req, start_response):
 
     clear_match = re.fullmatch(r"/api/admin/matches/(\d+)/clear-result", req.path)
     if clear_match and req.method == "POST":
-        _, error = require_admin(req, start_response)
+        user, error = require_admin(req, start_response)
         if error:
             return error
         match_id = int(clear_match.group(1))
         with DB.connect() as conn:
-            match = DB.one(DB.execute(conn, "SELECT id FROM matches WHERE id = ?", (match_id,)))
+            match = DB.one(DB.execute(conn, "SELECT * FROM matches WHERE id = ?", (match_id,)))
+            changed_at = iso_now()
+            if match:
+                record_result_audit(
+                    conn,
+                    match,
+                    {
+                        "result_home": None,
+                        "result_away": None,
+                        "penalty_winner": None,
+                        "status": "agendado",
+                        "closed_at": None,
+                    },
+                    user,
+                    "clear_result",
+                )
             if not match:
                 return json_error(start_response, "Partida não encontrada.", 404, "partida_nao_encontrada")
             DB.execute(
@@ -1161,9 +1700,9 @@ def handle_api(req, start_response):
                     status = 'agendado', closed_at = NULL, updated_at = ?
                 WHERE id = ?
                 """,
-                (iso_now(), match_id),
+                (changed_at, match_id),
             )
-            DB.execute(conn, "UPDATE predictions SET points = 0, updated_at = ? WHERE match_id = ?", (iso_now(), match_id))
+            DB.execute(conn, "UPDATE predictions SET points = 0, updated_at = ? WHERE match_id = ?", (changed_at, match_id))
             conn.commit()
         return json_response(start_response, {"ok": True, "message": "Resultado reaberto. Pontos removidos desta partida."})
 
@@ -1178,7 +1717,21 @@ def serve_static(req, start_response):
     if not requested.exists() or not requested.is_file():
         return json_error(start_response, "Arquivo não encontrado.", 404, "arquivo_nao_encontrado")
     content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
+    if requested.name.endswith(".webmanifest"):
+        content_type = "application/manifest+json"
     return send(start_response, requested.read_bytes(), content_type=content_type)
+
+
+def serve_service_worker(start_response):
+    worker = STATIC_DIR / "sw.js"
+    if not worker.exists():
+        return json_error(start_response, "Arquivo nÃ£o encontrado.", 404, "arquivo_nao_encontrado")
+    return send(
+        start_response,
+        worker.read_bytes(),
+        content_type="application/javascript; charset=utf-8",
+        headers=[("Cache-Control", "no-cache")],
+    )
 
 
 def serve_index(start_response):
@@ -1191,6 +1744,8 @@ def application(environ, start_response):
     try:
         if req.path.startswith("/api/"):
             return handle_api(req, start_response)
+        if req.path == "/sw.js":
+            return serve_service_worker(start_response)
         if req.path.startswith("/static/"):
             return serve_static(req, start_response)
         if req.path in {"/", "/index.html"}:
