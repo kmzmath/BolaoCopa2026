@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bolão Copa 2026</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <div id="toast-area" class="toast-area" aria-live="polite" aria-atomic="true"></div>
+
+    <section id="auth-view" class="auth-view">
+      <div class="auth-panel">
+        <div class="brand-block">
+          <img src="/static/mark.svg" alt="" class="brand-mark" />
+          <div>
+            <h1>Bolão Copa 2026</h1>
+            <p>Palpites, resultados e ranking em tempo real.</p>
+          </div>
+        </div>
+
+        <div class="auth-tabs" role="tablist" aria-label="Acesso">
+          <button type="button" class="auth-tab active" data-auth-mode="login">Entrar</button>
+          <button type="button" class="auth-tab" data-auth-mode="register">Criar conta</button>
+        </div>
+
+        <form id="auth-form" class="auth-form">
+          <label>
+            <span>Usuário</span>
+            <input id="auth-username" name="username" autocomplete="username" maxlength="40" required />
+          </label>
+          <label>
+            <span>Senha</span>
+            <input id="auth-password" name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit" class="primary-action">
+            <span aria-hidden="true">✓</span>
+            <span id="auth-submit-label">Entrar</span>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <section id="app-view" class="app-view hidden">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <img src="/static/mark.svg" alt="" class="mini-mark" />
+          <div>
+            <strong>Bolão Copa 2026</strong>
+            <span id="current-user"></span>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="topbar-avatar" class="avatar avatar-small"></span>
+          <button type="button" id="logout-button" class="ghost-action" title="Sair">
+            <span aria-hidden="true">×</span>
+            <span>Sair</span>
+          </button>
+        </div>
+      </header>
+
+      <nav class="main-tabs" aria-label="Navegação principal">
+        <button type="button" class="main-tab active" data-tab="predictions">Palpites</button>
+        <button type="button" class="main-tab" data-tab="ranking">Ranking</button>
+        <button type="button" class="main-tab" data-tab="profile">Perfil</button>
+        <button type="button" class="main-tab" data-tab="rules">Pontuação</button>
+        <button type="button" class="main-tab admin-only hidden" data-tab="admin">Admin</button>
+      </nav>
+
+      <main>
+        <section id="panel-predictions" class="panel active">
+          <div class="section-head">
+            <div>
+              <h2>Palpites</h2>
+              <p id="server-clock"></p>
+            </div>
+            <button type="button" id="refresh-button" class="icon-action" title="Atualizar">
+              <span aria-hidden="true">↻</span>
+            </button>
+          </div>
+
+          <div class="scope-tabs" role="tablist" aria-label="Lista de jogos">
+            <button type="button" class="scope-tab active" data-scope="upcoming">Próximas 24hrs</button>
+            <button type="button" class="scope-tab" data-scope="all">Todos os jogos</button>
+          </div>
+
+          <div id="filter-buttons" class="filter-buttons" aria-label="Filtros de jogos"></div>
+
+          <div id="matches-list" class="match-list"></div>
+        </section>
+
+        <section id="panel-ranking" class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Ranking</h2>
+              <p>Classificação atual do bolão.</p>
+            </div>
+          </div>
+          <div id="ranking-list" class="ranking-list"></div>
+        </section>
+
+        <section id="panel-profile" class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Perfil</h2>
+              <p>Escolha uma foto para aparecer no ranking e nos palpites.</p>
+            </div>
+          </div>
+          <form id="profile-form" class="profile-panel">
+            <div class="profile-preview">
+              <span id="profile-avatar" class="avatar avatar-large"></span>
+              <div>
+                <strong id="profile-username"></strong>
+                <span>JPG, PNG ou WebP.</span>
+              </div>
+            </div>
+            <label>
+              <span>Foto de perfil</span>
+              <input id="profile-photo" type="file" accept="image/png,image/jpeg,image/webp" />
+            </label>
+            <div class="actions-row">
+              <button type="submit" class="primary-action">
+                <span aria-hidden="true">✓</span>
+                <span>Salvar foto</span>
+              </button>
+              <button type="button" id="remove-avatar-button" class="danger-action">
+                <span aria-hidden="true">×</span>
+                <span>Remover foto</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section id="panel-rules" class="panel">
+          <div class="section-head">
+            <div>
+              <h2>Pontuação</h2>
+              <p>A maior regra satisfeita é a única aplicada.</p>
+            </div>
+          </div>
+          <div class="rules-grid">
+            <table>
+              <caption>Partidas em geral</caption>
+              <thead>
+                <tr><th>Pontos</th><th>Regra</th><th>Exemplo</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>6</td><td>Placar exato</td><td>Palpite 2-1, jogo 2-1</td></tr>
+                <tr><td>4</td><td>Vencedor correto + gols de um time</td><td>Palpite 2-0, jogo 2-1</td></tr>
+                <tr><td>3</td><td>Vencedor correto</td><td>Palpite 1-0, jogo 3-1</td></tr>
+                <tr><td>1</td><td>Gols de um time sem acertar vencedor</td><td>Palpite 2-1, jogo 0-1</td></tr>
+              </tbody>
+            </table>
+            <table>
+              <caption>Mata-mata com pênaltis</caption>
+              <thead>
+                <tr><th>Pontos</th><th>Regra</th><th>Condição</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>9</td><td>Empate exato + classificado correto</td><td>1-1 e time A avança</td></tr>
+                <tr><td>6</td><td>Empate exato</td><td>Placar certo, classificado errado</td></tr>
+                <tr><td>6</td><td>Empate sem exato + classificado correto</td><td>0-0, jogo 2-2 e time B avança</td></tr>
+                <tr><td>3</td><td>Empate sem exato</td><td>Empate previsto, classificado errado</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="panel-admin" class="panel admin-only hidden">
+          <div class="section-head">
+            <div>
+              <h2>Administração</h2>
+              <p>Salvar ou corrigir resultados recalcula o ranking.</p>
+            </div>
+          </div>
+          <div id="admin-list" class="match-list"></div>
+        </section>
+      </main>
+    </section>
+
+    <div id="details-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="details-title">
+      <div class="modal-backdrop" data-close-details></div>
+      <section class="modal-panel">
+        <header class="modal-head">
+          <h2 id="details-title">Detalhes</h2>
+          <button type="button" class="icon-action close-details" data-close-details title="Fechar">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div class="details-tabs" role="tablist" aria-label="Detalhes do jogo">
+          <button type="button" class="details-tab active" data-details-tab="predictions">Palpites</button>
+          <button type="button" class="details-tab" data-details-tab="stats">Estatísticas</button>
+        </div>
+        <div id="details-content" class="details-content"></div>
+      </section>
+    </div>
+  </body>
+</html>

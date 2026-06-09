@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" role="img" aria-label="Campo de futebol">
+  <rect width="80" height="80" rx="8" fill="#0b6b45"/>
+  <path d="M12 12h56v56H12z" fill="none" stroke="#f7f4e8" stroke-width="3"/>
+  <path d="M40 12v56M12 28h10v24H12M68 28H58v24h10" fill="none" stroke="#f7f4e8" stroke-width="3"/>
+  <circle cx="40" cy="40" r="12" fill="none" stroke="#f7f4e8" stroke-width="3"/>
+  <circle cx="40" cy="40" r="5" fill="#f5c542"/>
+</svg>
+
