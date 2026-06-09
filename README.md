@@ -26,7 +26,7 @@ Abra `http://127.0.0.1:8000`.
 
 Por padrão, em desenvolvimento o admin é:
 
-- Usuário: `admin`
+- Usuário: `Math`
 - Senha: `admin123`
 
 Defina outras credenciais antes de subir:

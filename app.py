@@ -290,7 +290,7 @@ def seed_matches_if_needed(conn):
 
 
 def ensure_admin_user(conn):
-    admin_username = os.getenv("ADMIN_USERNAME", "admin").strip() or "admin"
+    admin_username = os.getenv("ADMIN_USERNAME", "Math").strip() or "Math"
     admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
     norm = normalize_username(admin_username)
     existing = DB.one(DB.execute(conn, "SELECT id, is_admin FROM users WHERE username_norm = ?", (norm,)))
@@ -298,6 +298,18 @@ def ensure_admin_user(conn):
         if not boolish(existing["is_admin"]):
             DB.execute(conn, "UPDATE users SET is_admin = ? WHERE id = ?", (True, existing["id"]))
         return
+    legacy_norm = normalize_username("admin")
+    if norm != legacy_norm:
+        legacy_admin = DB.one(
+            DB.execute(conn, "SELECT id, is_admin FROM users WHERE username_norm = ?", (legacy_norm,))
+        )
+        if legacy_admin and boolish(legacy_admin["is_admin"]):
+            DB.execute(
+                conn,
+                "UPDATE users SET username = ?, username_norm = ?, is_admin = ? WHERE id = ?",
+                (admin_username, norm, True, legacy_admin["id"]),
+            )
+            return
     DB.execute(
         conn,
         """
