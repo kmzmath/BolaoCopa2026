@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bolao-copa-2026
+    name: bolao-panceta-copa-2026
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
