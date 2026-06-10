@@ -23,6 +23,11 @@ const state = {
     status: "all",
     sort: "time",
   },
+  filterOpen: {
+    group: false,
+    phase: false,
+    status: false,
+  },
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -38,6 +43,12 @@ const PHASE_LABELS = {
   terceiro_lugar: "Disputa 3º Lugar",
   final: "Final",
 };
+
+const FILTER_ICON = `
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 6h16l-6 7v4l-4 2v-6L4 6z"></path>
+  </svg>
+`;
 
 const FLAG_CODES = {
   "África do Sul": "za",
@@ -107,7 +118,7 @@ const FILTER_GROUPS = [
     title: "Fases",
     className: "phase-buttons",
     options: [
-      { value: "all", label: "Todas" },
+      { value: "all", label: "Todos" },
       { value: "grupos", label: "Grupos" },
       { value: "segunda_fase", label: "32 avos" },
       { value: "oitavas", label: "Oitavas" },
@@ -271,6 +282,13 @@ function bindUi() {
   });
 
   $("#filter-buttons").addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-filter-toggle]");
+    if (toggle) {
+      const key = toggle.dataset.filterToggle;
+      state.filterOpen[key] = !state.filterOpen[key];
+      renderFilterButtons();
+      return;
+    }
     const button = event.target.closest("button");
     if (!button) return;
     const key = button.dataset.filterKey;
@@ -278,6 +296,7 @@ function bindUi() {
     state.filters[key] = button.dataset.value;
     if (key === "group" && button.dataset.value !== "all") state.filters.phase = "all";
     if (key === "phase" && button.dataset.value !== "all") state.filters.group = "all";
+    if (key in state.filterOpen) state.filterOpen[key] = false;
     if (key !== "sort") state.scope = "all";
     renderScopeTabs();
     renderFilterButtons();
@@ -471,7 +490,7 @@ function renderEarlyFinal() {
   if (!container) return;
   const data = state.earlyFinal;
   if (!data) {
-    container.innerHTML = `<div class="empty-state">Carregando final adiantada...</div>`;
+    container.innerHTML = `<div class="empty-state">Carregando Final...</div>`;
     return;
   }
 
@@ -522,7 +541,7 @@ function renderEarlyFinal() {
         </div>
         <button type="submit" class="primary-action" ${disabled}>
           <span aria-hidden="true">✓</span>
-          <span>${hasPrediction ? "Atualizar final adiantada" : "Salvar final adiantada"}</span>
+          <span>${hasPrediction ? "Atualizar Final" : "Salvar Final"}</span>
         </button>
       </form>
       ${earlyFinalOutcomeHtml(data.outcome)}
@@ -557,7 +576,7 @@ function earlyFinalSummary(label, teamName) {
 function earlyFinalOutcomeHtml(outcome = {}) {
   const finalists = outcome.finalists || [];
   if (!finalists.length && !outcome.champion) {
-    return `<div class="reveal-line">O resultado da final adiantada será calculado quando a final estiver definida.</div>`;
+    return `<div class="reveal-line">O resultado da Final será calculado quando a final estiver definida.</div>`;
   }
   return `
     <div class="early-final-outcome">
@@ -584,7 +603,7 @@ async function handleEarlyFinalSubmit(event) {
     state.earlyFinal = data;
     renderEarlyFinal();
     await loadRanking(false);
-    showToast(data.message || "Final adiantada salva.");
+    showToast(data.message || "Final salva.");
   } catch (error) {
     showToast(error.message, "error");
   }
@@ -652,6 +671,19 @@ function renderFilterButtons() {
         return `<button type="button" class="filter-button${allClass} ${active ? "active" : ""}" data-filter-key="${group.key}" data-value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>`;
       })
       .join("");
+    if (group.key !== "sort") {
+      const open = Boolean(state.filterOpen[group.key]);
+      return `
+        <section class="filter-category dropdown-filter ${group.className} ${open ? "open" : ""}">
+          <button type="button" class="filter-toggle" data-filter-toggle="${group.key}" aria-expanded="${open ? "true" : "false"}">
+            <span class="filter-toggle-title">${FILTER_ICON}<span>${escapeHtml(group.title)}</span></span>
+            <strong>${escapeHtml(filterLabel(group))}</strong>
+            <span class="filter-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div class="filter-grid ${open ? "" : "hidden"}">${buttons}</div>
+        </section>
+      `;
+    }
     return `
       <section class="filter-category ${group.className}">
         <h3>${escapeHtml(group.title)}</h3>
@@ -659,6 +691,10 @@ function renderFilterButtons() {
       </section>
     `;
   }).join("");
+}
+
+function filterLabel(group) {
+  return group.options.find((option) => option.value === state.filters[group.key])?.label || "Todos";
 }
 
 function renderClock() {
@@ -676,7 +712,7 @@ function renderMissingCounter() {
   if (!counter) return;
   const count = missingMatches().length;
   counter.innerHTML = `
-    <button type="button" class="missing-chip ${count ? "" : "complete"}" title="Ver jogos sem palpite">
+    <button type="button" class="missing-chip ${count ? "" : "complete"}" title="Ver palpites faltantes">
       <span>Faltam</span>
       <strong>${count}</strong>
     </button>
@@ -726,7 +762,7 @@ function groupedMatches(matches) {
     return [{ title: "Próximas 24hrs", matches }];
   }
   if (state.scope === "missing") {
-    return [{ title: "Faltam palpites", matches }];
+    return [{ title: "Palpites Faltantes", matches }];
   }
   const sortMode = state.filters.sort;
   const map = new Map();
@@ -1138,7 +1174,7 @@ function rankingBreakdown(row) {
   return `
     <div class="ranking-details-head">
       <strong>${escapeHtml(row.username)}</strong>
-      <span>${breakdown.settled_predictions || 0} palpites com resultado encerrado · ${row.early_final_points || 0} pts na final adiantada</span>
+      <span>${breakdown.settled_predictions || 0} palpites com resultado encerrado · ${row.early_final_points || 0} pts na Final</span>
     </div>
     <div class="breakdown-grid">
       ${specials

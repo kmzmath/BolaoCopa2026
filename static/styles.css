@@ -438,8 +438,6 @@ main {
 }
 
 .scope-tabs {
-  position: relative;
-  isolation: isolate;
   margin-bottom: 10px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -447,37 +445,16 @@ main {
   background: rgba(19, 22, 29, 0.74);
 }
 
-.scope-tabs::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  top: 4px;
-  left: 4px;
-  width: calc(33.333% - 6px);
-  height: calc(100% - 8px);
-  border-radius: 8px;
-  background: rgba(138, 63, 252, 0.24);
-  border: 1px solid rgba(138, 63, 252, 0.58);
-  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.scope-tabs.scope-all::before {
-  transform: translateX(200%);
-}
-
-.scope-tabs.scope-missing::before {
-  transform: translateX(100%);
-}
-
 .scope-tab {
   flex: 1;
-  position: relative;
-  z-index: 1;
   background: transparent;
   border-color: transparent;
 }
 
 .scope-tab.active {
+  background: #2b1d49;
+  border-color: #8a3ffc;
+  box-shadow: inset 0 0 0 1px #8a3ffc;
   color: #d8bcff;
 }
 
@@ -502,6 +479,61 @@ main {
   font-size: 0.78rem;
   font-weight: 950;
   text-transform: uppercase;
+}
+
+.filter-toggle {
+  width: 100%;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: rgba(12, 15, 20, 0.84);
+  border: 1px solid var(--line);
+  color: var(--soft);
+  text-align: left;
+}
+
+.filter-toggle:hover {
+  border-color: rgba(138, 63, 252, 0.55);
+}
+
+.filter-toggle-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 950;
+  text-transform: uppercase;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.filter-toggle-title svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.filter-toggle strong {
+  color: #d8bcff;
+  font-size: 0.84rem;
+}
+
+.filter-chevron {
+  color: var(--muted);
+  font-weight: 950;
+  transition: transform 160ms ease;
+}
+
+.dropdown-filter.open .filter-chevron {
+  transform: rotate(180deg);
 }
 
 .filter-grid {
