@@ -11,6 +11,8 @@ const state = {
   earlyFinal: null,
   adminUsers: [],
   resultAudits: [],
+  predictionDrafts: new Map(),
+  resultDrafts: new Map(),
   publicPredictions: new Map(),
   serverOffsetMs: 0,
   details: {
@@ -208,6 +210,8 @@ function bindUi() {
     state.matches = [];
     state.ranking = [];
     state.earlyFinal = null;
+    state.predictionDrafts.clear();
+    state.resultDrafts.clear();
     showAuth();
   });
 
@@ -304,9 +308,11 @@ function bindUi() {
   });
 
   $("#matches-list").addEventListener("click", handleMatchClick);
+  $("#matches-list").addEventListener("input", handlePredictionInput);
   $("#early-final-panel").addEventListener("submit", handleEarlyFinalSubmit);
   $("#ranking-list").addEventListener("click", handleRankingClick);
   $("#admin-list").addEventListener("click", handleAdminClick);
+  $("#admin-list").addEventListener("input", handleResultInput);
   $("#panel-admin").addEventListener("click", handleAdminPanelClick);
   $("#details-modal").addEventListener("click", handleDetailsClick);
 
@@ -834,9 +840,10 @@ function phaseLabel(phaseSlug) {
 
 function matchCard(match) {
   const prediction = match.my_prediction || {};
+  const draft = state.predictionDrafts.get(match.id) || {};
   const locked = isLocked(match);
-  const homeValue = prediction.home_score ?? "";
-  const awayValue = prediction.away_score ?? "";
+  const homeValue = draft.home_score ?? prediction.home_score ?? "";
+  const awayValue = draft.away_score ?? prediction.away_score ?? "";
   const status = currentStatus(match);
   const statusClass = status === "encerrado" ? "gold" : status === "em andamento" ? "blue" : "";
   const points = prediction.points ? ` · ${prediction.points} pts` : "";
@@ -955,6 +962,17 @@ async function handleMatchClick(event) {
   }
 }
 
+function handlePredictionInput(event) {
+  if (!event.target.matches("[data-home], [data-away]")) return;
+  const card = event.target.closest(".match-card");
+  if (!card) return;
+  const matchId = Number(card.dataset.matchId);
+  state.predictionDrafts.set(matchId, {
+    home_score: $("[data-home]", card).value,
+    away_score: $("[data-away]", card).value,
+  });
+}
+
 function pulseButton(button) {
   button.classList.remove("button-bump");
   void button.offsetWidth;
@@ -970,6 +988,7 @@ async function savePrediction(card, matchId) {
     const data = await api(`/api/predictions/${matchId}`, { method: "POST", body });
     const match = state.matches.find((item) => item.id === matchId);
     if (match) match.my_prediction = data.prediction;
+    state.predictionDrafts.delete(matchId);
     showToast(data.message || "Palpite aceito.");
     await loadRanking(false);
     renderMissingCounter();
@@ -984,6 +1003,7 @@ async function clearPrediction(matchId) {
     const data = await api(`/api/predictions/${matchId}`, { method: "POST", body: { clear: true } });
     const match = state.matches.find((item) => item.id === matchId);
     if (match) match.my_prediction = null;
+    state.predictionDrafts.delete(matchId);
     showToast(data.message || "Palpite removido.");
     await loadRanking(false);
     renderMissingCounter();
@@ -1302,6 +1322,9 @@ function formatAuditResult(audit, prefix) {
 
 function adminCard(match) {
   const hasResult = match.result_home !== null && match.result_home !== undefined;
+  const draft = state.resultDrafts.get(match.id) || {};
+  const resultHome = draft.result_home ?? match.result_home ?? "";
+  const resultAway = draft.result_away ?? match.result_away ?? "";
   return `
     <article class="match-card" data-match-id="${match.id}" data-admin="true">
       <div class="match-top">
@@ -1316,9 +1339,9 @@ function adminCard(match) {
       <div class="match-body">
         <div class="score-row">
           ${teamBlock(match.team_a)}
-          <input class="score-input admin-home" type="number" min="0" max="99" inputmode="numeric" value="${escapeHtml(match.result_home ?? "")}" aria-label="Resultado do time A" />
+          <input class="score-input admin-home" type="number" min="0" max="99" inputmode="numeric" value="${escapeHtml(resultHome)}" aria-label="Resultado do time A" />
           <span class="versus">x</span>
-          <input class="score-input admin-away" type="number" min="0" max="99" inputmode="numeric" value="${escapeHtml(match.result_away ?? "")}" aria-label="Resultado do time B" />
+          <input class="score-input admin-away" type="number" min="0" max="99" inputmode="numeric" value="${escapeHtml(resultAway)}" aria-label="Resultado do time B" />
           ${teamBlock(match.team_b, true)}
         </div>
         <div class="actions-row">
@@ -1346,6 +1369,17 @@ async function handleAdminClick(event) {
   if (button.classList.contains("clear-result")) {
     await clearResult(matchId);
   }
+}
+
+function handleResultInput(event) {
+  if (!event.target.matches(".admin-home, .admin-away")) return;
+  const card = event.target.closest(".match-card");
+  if (!card) return;
+  const matchId = Number(card.dataset.matchId);
+  state.resultDrafts.set(matchId, {
+    result_home: $(".admin-home", card).value,
+    result_away: $(".admin-away", card).value,
+  });
 }
 
 async function handleAdminPanelClick(event) {
@@ -1459,6 +1493,7 @@ async function saveResult(card, matchId) {
   };
   try {
     const data = await api(`/api/admin/matches/${matchId}/result`, { method: "POST", body });
+    state.resultDrafts.delete(matchId);
     showToast(data.message || "Resultado salvo.");
     await loadAll(false);
   } catch (error) {
@@ -1469,6 +1504,7 @@ async function saveResult(card, matchId) {
 async function clearResult(matchId) {
   try {
     const data = await api(`/api/admin/matches/${matchId}/clear-result`, { method: "POST" });
+    state.resultDrafts.delete(matchId);
     showToast(data.message || "Resultado reaberto.");
     await loadAll(false);
   } catch (error) {
