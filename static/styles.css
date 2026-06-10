@@ -377,6 +377,7 @@ main {
 
 .panel {
   display: none;
+  overflow-x: hidden;
 }
 
 .panel.active {
@@ -799,6 +800,105 @@ main {
   font-weight: 700;
 }
 
+.early-final-panel {
+  width: min(100%, 760px);
+}
+
+.early-final-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: rgba(19, 22, 29, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.20);
+}
+
+.early-final-status,
+.early-final-outcome {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.early-final-status strong,
+.early-final-outcome strong {
+  color: var(--ink);
+}
+
+.early-final-status span:not(.pill),
+.early-final-outcome span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.early-final-form {
+  display: grid;
+  gap: 12px;
+}
+
+.early-final-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.early-final-summary div,
+.early-final-score div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(138, 63, 252, 0.10);
+  border: 1px solid rgba(138, 63, 252, 0.18);
+}
+
+.early-final-summary img,
+.early-final-summary div > span:first-child {
+  width: 34px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #202530;
+}
+
+.early-final-summary div > span:first-child {
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 950;
+}
+
+.early-final-summary span,
+.early-final-score span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.early-final-summary strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.early-final-score {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.early-final-score strong {
+  color: #d8bcff;
+  font-size: 1.18rem;
+}
+
 .score-input {
   min-height: 58px;
   padding: 0;
@@ -819,13 +919,6 @@ main {
   text-align: center;
   color: var(--muted);
   font-weight: 950;
-}
-
-.advance-row,
-.admin-result-row,
-.penalty-row {
-  display: grid;
-  gap: 8px;
 }
 
 .actions-row {
@@ -1001,6 +1094,11 @@ main {
   justify-self: end;
   color: #d8bcff;
   font-size: 1.05rem;
+}
+
+.breakdown-row.special {
+  background: rgba(55, 211, 153, 0.09);
+  border: 1px solid rgba(55, 211, 153, 0.16);
 }
 
 .modal {
@@ -1570,6 +1668,15 @@ th:first-child {
   .score-input {
     min-height: 52px;
     font-size: 1.12rem;
+  }
+
+  .early-final-card {
+    padding: 12px;
+  }
+
+  .early-final-summary,
+  .early-final-score {
+    grid-template-columns: 1fr;
   }
 
   .ranking-head,

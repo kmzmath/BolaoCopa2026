@@ -10,6 +10,7 @@ Site mobile-first para bolão entre amigos, com cadastro por usuário/senha, pal
 - Calendário importado de `data/copa_do_mundo_2026_jogos_horario_brasilia.csv`.
 - Horários em `America/Sao_Paulo` e bloqueio de palpites no instante de início da partida.
 - Palpites editáveis até o bloqueio.
+- Final adiantada com campeão e vice-campeão, bloqueada no início do primeiro jogo.
 - Palpites de outros usuários ocultos até 5 minutos após o início do jogo.
 - Pontuação automática ao encerrar ou editar resultado.
 - Perfil com foto do jogador.
@@ -19,8 +20,8 @@ Site mobile-first para bolão entre amigos, com cadastro por usuário/senha, pal
 - Auditoria de resultados com admin responsável, data, placar anterior e placar novo.
 - PWA básico para adicionar o site à tela inicial do celular.
 - Ranking com posição, foto, jogador, palpites realizados, pontos e estatísticas por tipo de acerto.
-- Mata-mata com escolha obrigatória de classificado quando o palpite for empate.
-- Resolução automática de vencedores/perdedores de partidas anteriores e posições de grupos quando os resultados estiverem completos.
+- Mata-mata pontuado apenas pelo placar do tempo regulamentar.
+- Resolução automática de posições de grupos e de vencedores/perdedores quando houver vencedor no tempo regulamentar.
 
 ## Rodar localmente
 
@@ -93,6 +94,8 @@ python -m unittest discover -s tests
 ```
 
 ## Observações de regra
+
+Na Final adiantada, cada jogador escolhe campeão e vice-campeão antes do primeiro jogo da Copa. O acerto do campeão soma 10 pontos, e o vice-campeão correto soma 5 pontos.
 
 O desempate de grupos é calculado por pontos, saldo de gols, gols pró, vitórias e nome do time. Se você quiser espelhar todos os critérios oficiais da FIFA em ordem completa, essa função pode ser refinada em `compute_group_tables`.
 

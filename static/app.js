@@ -8,6 +8,7 @@ const state = {
   adminView: "results",
   matches: [],
   ranking: [],
+  earlyFinal: null,
   adminUsers: [],
   resultAudits: [],
   publicPredictions: new Map(),
@@ -26,6 +27,17 @@ const state = {
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+const PHASE_ORDER = ["grupos", "segunda_fase", "oitavas", "quartas", "semifinal", "terceiro_lugar", "final"];
+const PHASE_LABELS = {
+  grupos: "Fase de Grupos",
+  segunda_fase: "32 avos",
+  oitavas: "Oitavas",
+  quartas: "Quartas",
+  semifinal: "Semifinal",
+  terceiro_lugar: "Disputa 3º Lugar",
+  final: "Final",
+};
 
 const FLAG_CODES = {
   "África do Sul": "za",
@@ -184,6 +196,7 @@ function bindUi() {
     state.user = null;
     state.matches = [];
     state.ranking = [];
+    state.earlyFinal = null;
     showAuth();
   });
 
@@ -272,10 +285,9 @@ function bindUi() {
   });
 
   $("#matches-list").addEventListener("click", handleMatchClick);
-  $("#matches-list").addEventListener("input", handleScoreInput);
+  $("#early-final-panel").addEventListener("submit", handleEarlyFinalSubmit);
   $("#ranking-list").addEventListener("click", handleRankingClick);
   $("#admin-list").addEventListener("click", handleAdminClick);
-  $("#admin-list").addEventListener("input", handleScoreInput);
   $("#panel-admin").addEventListener("click", handleAdminPanelClick);
   $("#details-modal").addEventListener("click", handleDetailsClick);
 
@@ -363,7 +375,7 @@ function setAuthMode(mode) {
 }
 
 async function loadAll(withToast = false) {
-  const jobs = [loadMatches(false), loadRanking(false)];
+  const jobs = [loadMatches(false), loadRanking(false), loadEarlyFinal(false)];
   if (state.user?.is_admin) {
     jobs.push(loadAdminUsers(false), loadResultAudits(false));
   }
@@ -387,6 +399,13 @@ async function loadRanking() {
   const data = await api("/api/ranking");
   state.ranking = data.ranking;
   renderRanking();
+}
+
+async function loadEarlyFinal() {
+  if (!state.user) return;
+  const data = await api("/api/early-final");
+  state.earlyFinal = data;
+  renderEarlyFinal();
 }
 
 async function loadAdminUsers() {
@@ -427,6 +446,7 @@ function renderTabs() {
   const panel = $(`#panel-${state.activeTab}`);
   if (panel) panel.classList.add("active");
   if (state.activeTab === "profile") renderProfile();
+  if (state.activeTab === "early-final") renderEarlyFinal();
   if (state.activeTab === "admin") renderAdmin();
 }
 
@@ -444,6 +464,130 @@ function renderProfile() {
   $("#profile-username").textContent = state.user.username;
   renderAvatarElement($("#profile-avatar"), state.user);
   $("#remove-avatar-button").disabled = !state.user.avatar_url;
+}
+
+function renderEarlyFinal() {
+  const container = $("#early-final-panel");
+  if (!container) return;
+  const data = state.earlyFinal;
+  if (!data) {
+    container.innerHTML = `<div class="empty-state">Carregando final adiantada...</div>`;
+    return;
+  }
+
+  const prediction = data.prediction || {};
+  const disabled = data.locked ? "disabled" : "";
+  const hasPrediction = Boolean(data.prediction);
+  const points = data.prediction?.points || 0;
+  const championHit = Boolean(data.prediction?.champion_hit);
+  const runnerUpHit = Boolean(data.prediction?.runner_up_hit);
+
+  container.innerHTML = `
+    <section class="early-final-card">
+      <div class="early-final-status">
+        <span class="pill ${data.locked ? "gold" : "blue"}">${data.locked ? "Fechada" : "Aberta"}</span>
+        <strong>Trava em ${formatDateTime(data.lock_at)}</strong>
+        <span>${hasPrediction ? `Sua pontuação atual: ${points} pts` : "Nenhum palpite salvo ainda."}</span>
+      </div>
+      <form id="early-final-form" class="early-final-form">
+        <label>
+          <span>Campeão</span>
+          <select name="champion" ${disabled} required>
+            ${teamOptionsHtml(data.teams, prediction.champion)}
+          </select>
+        </label>
+        <label>
+          <span>Vice-campeão</span>
+          <select name="runner_up" ${disabled} required>
+            ${teamOptionsHtml(data.teams, prediction.runner_up)}
+          </select>
+        </label>
+        <div class="early-final-summary">
+          ${earlyFinalSummary("Campeão", prediction.champion)}
+          ${earlyFinalSummary("Vice", prediction.runner_up)}
+        </div>
+        <div class="early-final-score">
+          <div>
+            <span>Campeão</span>
+            <strong>${championHit ? "10" : "0"} pts</strong>
+          </div>
+          <div>
+            <span>Vice</span>
+            <strong>${runnerUpHit ? "5" : "0"} pts</strong>
+          </div>
+          <div>
+            <span>Total</span>
+            <strong>${points} pts</strong>
+          </div>
+        </div>
+        <button type="submit" class="primary-action" ${disabled}>
+          <span aria-hidden="true">✓</span>
+          <span>${hasPrediction ? "Atualizar final adiantada" : "Salvar final adiantada"}</span>
+        </button>
+      </form>
+      ${earlyFinalOutcomeHtml(data.outcome)}
+    </section>
+  `;
+}
+
+function teamOptionsHtml(teams, selected) {
+  return `
+    <option value="">Selecione</option>
+    ${(teams || [])
+      .map((team) => `<option value="${escapeHtml(team)}" ${team === selected ? "selected" : ""}>${escapeHtml(team)}</option>`)
+      .join("")}
+  `;
+}
+
+function earlyFinalSummary(label, teamName) {
+  if (!teamName) return "";
+  const code = flagCodeForTeam(teamName);
+  const flag = code
+    ? `<img src="https://flagcdn.com/w40/${code}.png" alt="" loading="lazy" />`
+    : `<span>${escapeHtml(teamInitials(teamName))}</span>`;
+  return `
+    <div>
+      ${flag}
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(teamName)}</strong>
+    </div>
+  `;
+}
+
+function earlyFinalOutcomeHtml(outcome = {}) {
+  const finalists = outcome.finalists || [];
+  if (!finalists.length && !outcome.champion) {
+    return `<div class="reveal-line">O resultado da final adiantada será calculado quando a final estiver definida.</div>`;
+  }
+  return `
+    <div class="early-final-outcome">
+      <strong>Resultado apurado</strong>
+      <span>Final: ${finalists.length === 2 ? `${escapeHtml(finalists[0])} × ${escapeHtml(finalists[1])}` : "ainda indefinida"}</span>
+      <span>Campeão: ${outcome.champion ? escapeHtml(outcome.champion) : "ainda indefinido"}</span>
+      <span>Vice: ${outcome.runner_up ? escapeHtml(outcome.runner_up) : "ainda indefinido"}</span>
+    </div>
+  `;
+}
+
+async function handleEarlyFinalSubmit(event) {
+  event.preventDefault();
+  const form = event.target.closest("#early-final-form");
+  if (!form || state.earlyFinal?.locked) return;
+  const submit = $("button[type='submit']", form);
+  if (submit) pulseButton(submit);
+  const body = {
+    champion: form.elements.champion.value,
+    runner_up: form.elements.runner_up.value,
+  };
+  try {
+    const data = await api("/api/early-final", { method: "POST", body });
+    state.earlyFinal = data;
+    renderEarlyFinal();
+    await loadRanking(false);
+    showToast(data.message || "Final adiantada salva.");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function avatarHtml(user, className = "avatar") {
@@ -584,13 +728,20 @@ function groupedMatches(matches) {
   if (state.scope === "missing") {
     return [{ title: "Faltam palpites", matches }];
   }
+  const sortMode = state.filters.sort;
   const map = new Map();
   matches.forEach((match) => {
-    const key = match.group_code ? `Grupo ${match.group_code}` : match.round_label || match.phase;
+    const key = sectionTitleForMatch(match, sortMode);
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(match);
   });
   return Array.from(map.entries()).map(([title, grouped]) => ({ title, matches: grouped }));
+}
+
+function sectionTitleForMatch(match, sortMode) {
+  if (sortMode === "time") return formatDayTitle(match.start_at);
+  if (sortMode === "phase") return phaseLabel(match.phase_slug);
+  return match.group_code ? `Grupo ${match.group_code}` : match.round_label || match.phase;
 }
 
 function filteredMatches() {
@@ -621,11 +772,28 @@ function filteredMatches() {
       return `${a.group_code || "Z"}-${a.start_at}`.localeCompare(`${b.group_code || "Z"}-${b.start_at}`);
     }
     if (sortMode === "phase") {
-      return `${a.phase_slug}-${a.start_at}`.localeCompare(`${b.phase_slug}-${b.start_at}`);
+      return compareByPhase(a, b);
     }
-    return new Date(a.start_at) - new Date(b.start_at) || a.fifa_number - b.fifa_number;
+    return compareByTime(a, b);
   });
   return matches;
+}
+
+function compareByTime(a, b) {
+  return new Date(a.start_at) - new Date(b.start_at) || a.fifa_number - b.fifa_number;
+}
+
+function compareByPhase(a, b) {
+  return phaseRank(a.phase_slug) - phaseRank(b.phase_slug) || compareByTime(a, b);
+}
+
+function phaseRank(phaseSlug) {
+  const index = PHASE_ORDER.indexOf(phaseSlug);
+  return index >= 0 ? index : PHASE_ORDER.length;
+}
+
+function phaseLabel(phaseSlug) {
+  return PHASE_LABELS[phaseSlug] || phaseSlug || "Fase";
 }
 
 function matchCard(match) {
@@ -633,7 +801,6 @@ function matchCard(match) {
   const locked = isLocked(match);
   const homeValue = prediction.home_score ?? "";
   const awayValue = prediction.away_score ?? "";
-  const needsAdvance = match.is_knockout && homeValue !== "" && awayValue !== "" && String(homeValue) === String(awayValue);
   const status = currentStatus(match);
   const statusClass = status === "encerrado" ? "gold" : status === "em andamento" ? "blue" : "";
   const points = prediction.points ? ` · ${prediction.points} pts` : "";
@@ -658,14 +825,6 @@ function matchCard(match) {
           <span class="versus">x</span>
           <input class="score-input" data-away type="number" min="0" max="99" inputmode="numeric" value="${escapeHtml(awayValue)}" ${locked ? "disabled" : ""} aria-label="Placar do time B" />
           ${teamBlock(match.team_b, true)}
-        </div>
-        <div class="advance-row ${needsAdvance ? "" : "hidden"}">
-          <label>
-            <span>Quem avança</span>
-            <select data-advances ${locked ? "disabled" : ""}>
-              ${advanceOptions(match, prediction.advances)}
-            </select>
-          </label>
         </div>
         ${resultLine(match)}
         <div class="actions-row">
@@ -707,42 +866,22 @@ function teamInitials(name) {
   return (words[0]?.[0] || "?") + (words[1]?.[0] || "");
 }
 
-function advanceOptions(match, selected) {
-  return `
-    <option value="">Selecione</option>
-    <option value="A" ${selected === "A" ? "selected" : ""}>${escapeHtml(match.team_a.name)} avança</option>
-    <option value="B" ${selected === "B" ? "selected" : ""}>${escapeHtml(match.team_b.name)} avança</option>
-  `;
-}
-
 function resultLine(match) {
   if (match.result_home === null || match.result_home === undefined) {
     return isLocked(match)
       ? `<div class="reveal-line">Palpites fechados desde ${formatDateTime(match.start_at)}.</div>`
       : "";
   }
-  const winner =
-    match.penalty_winner === "A"
-      ? ` · ${escapeHtml(match.team_a.name)} avançou nos pênaltis`
-      : match.penalty_winner === "B"
-        ? ` · ${escapeHtml(match.team_b.name)} avançou nos pênaltis`
-        : "";
   const myPoints = match.my_prediction ? ` · seu palpite: ${match.my_prediction.points || 0} pts` : "";
-  return `<div class="result-line">Resultado: ${match.result_home} x ${match.result_away}${winner}${myPoints}</div>`;
+  return `<div class="result-line">Resultado: ${match.result_home} x ${match.result_away}${myPoints}</div>`;
 }
 
 function publicPredictionRow(row, match) {
-  const advance =
-    row.advances === "A"
-      ? ` · ${escapeHtml(match.team_a.name)} avança`
-      : row.advances === "B"
-        ? ` · ${escapeHtml(match.team_b.name)} avança`
-        : "";
   return `
     <div class="public-prediction">
       ${avatarHtml(row, "avatar user-avatar")}
       <strong>${escapeHtml(row.username)}</strong>
-      <span class="prediction-score">${row.home_score} × ${row.away_score}${advance}</span>
+      <span class="prediction-score">${row.home_score} × ${row.away_score}</span>
     </div>
   `;
 }
@@ -790,7 +929,6 @@ async function savePrediction(card, matchId) {
   const body = {
     home_score: $("[data-home]", card).value,
     away_score: $("[data-away]", card).value,
-    advances: $("[data-advances]", card)?.value || null,
   };
   try {
     const data = await api(`/api/predictions/${matchId}`, { method: "POST", body });
@@ -946,23 +1084,6 @@ function detailsHiddenMessage(match) {
   `;
 }
 
-function handleScoreInput(event) {
-  const card = event.target.closest(".match-card");
-  if (!card) return;
-  updateAdvanceVisibility(card);
-}
-
-function updateAdvanceVisibility(card) {
-  const match = state.matches.find((item) => item.id === Number(card.dataset.matchId));
-  if (!match) return;
-  const admin = card.dataset.admin === "true";
-  const home = admin ? $(".admin-home", card)?.value : $("[data-home]", card)?.value;
-  const away = admin ? $(".admin-away", card)?.value : $("[data-away]", card)?.value;
-  const row = admin ? $(".penalty-row", card) : $(".advance-row", card);
-  if (!row) return;
-  row.classList.toggle("hidden", !(match.is_knockout && home !== "" && away !== "" && home === away));
-}
-
 function renderRanking() {
   const list = $("#ranking-list");
   if (!state.ranking.length) {
@@ -1013,12 +1134,23 @@ function handleRankingClick(event) {
 function rankingBreakdown(row) {
   const breakdown = row.breakdown || { settled_predictions: 0, rules: [] };
   const rules = breakdown.rules || [];
+  const specials = breakdown.specials || [];
   return `
     <div class="ranking-details-head">
       <strong>${escapeHtml(row.username)}</strong>
-      <span>${breakdown.settled_predictions || 0} palpites com resultado encerrado</span>
+      <span>${breakdown.settled_predictions || 0} palpites com resultado encerrado · ${row.early_final_points || 0} pts na final adiantada</span>
     </div>
     <div class="breakdown-grid">
+      ${specials
+        .map(
+          (special) => `
+            <div class="breakdown-row special">
+              <span>${escapeHtml(special.label)}</span>
+              <strong>${special.points || 0}</strong>
+            </div>
+          `
+        )
+        .join("")}
       ${rules
         .map(
           (rule) => `
@@ -1128,14 +1260,12 @@ function renderAdminAudit() {
 function formatAuditResult(audit, prefix) {
   const home = audit[`${prefix}_result_home`];
   const away = audit[`${prefix}_result_away`];
-  const winner = audit[`${prefix}_penalty_winner`];
   if (home === null || home === undefined || away === null || away === undefined) return "sem resultado";
-  return `${home} x ${away}${winner ? ` · pênaltis ${winner}` : ""}`;
+  return `${home} x ${away}`;
 }
 
 function adminCard(match) {
   const hasResult = match.result_home !== null && match.result_home !== undefined;
-  const needsPenalty = match.is_knockout && hasResult && String(match.result_home) === String(match.result_away);
   return `
     <article class="match-card" data-match-id="${match.id}" data-admin="true">
       <div class="match-top">
@@ -1154,14 +1284,6 @@ function adminCard(match) {
           <span class="versus">x</span>
           <input class="score-input admin-away" type="number" min="0" max="99" inputmode="numeric" value="${escapeHtml(match.result_away ?? "")}" aria-label="Resultado do time B" />
           ${teamBlock(match.team_b, true)}
-        </div>
-        <div class="penalty-row ${needsPenalty ? "" : "hidden"}">
-          <label>
-            <span>Classificado nos pênaltis</span>
-            <select class="admin-penalty">
-              ${advanceOptions(match, match.penalty_winner)}
-            </select>
-          </label>
         </div>
         <div class="actions-row">
           <button type="button" class="primary-action save-result">
@@ -1298,7 +1420,6 @@ async function saveResult(card, matchId) {
   const body = {
     result_home: $(".admin-home", card).value,
     result_away: $(".admin-away", card).value,
-    penalty_winner: $(".admin-penalty", card)?.value || null,
   };
   try {
     const data = await api(`/api/admin/matches/${matchId}/result`, { method: "POST", body });
@@ -1342,6 +1463,17 @@ function formatDateTime(value) {
     month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+  }).format(date);
+}
+
+function formatDayTitle(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
   }).format(date);
 }
 

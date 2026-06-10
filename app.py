@@ -225,8 +225,11 @@ def init_db():
         DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id)")
         ensure_user_columns(conn)
         ensure_result_audit_table(conn)
+        ensure_early_final_table(conn)
         seed_matches_if_needed(conn)
         ensure_admin_user(conn)
+        recalc_all_points(conn)
+        recalc_all_early_final_points(conn)
         conn.commit()
 
 
@@ -296,6 +299,70 @@ def ensure_result_audit_table(conn):
         )
     DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_result_audits_match ON result_audits(match_id)")
     DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_result_audits_changed ON result_audits(changed_at)")
+
+
+def ensure_early_final_table(conn):
+    if DB.is_postgres:
+        DB.execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS early_final_predictions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                champion TEXT NOT NULL,
+                runner_up TEXT NOT NULL,
+                finalist_a TEXT,
+                finalist_b TEXT,
+                points INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+        )
+    else:
+        DB.execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS early_final_predictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                champion TEXT NOT NULL,
+                runner_up TEXT NOT NULL,
+                finalist_a TEXT NOT NULL,
+                finalist_b TEXT NOT NULL,
+                points INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+        )
+    ensure_early_final_runner_up_column(conn)
+    DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_early_final_user ON early_final_predictions(user_id)")
+
+
+def ensure_early_final_runner_up_column(conn):
+    if DB.is_postgres:
+        DB.execute(conn, "ALTER TABLE early_final_predictions ADD COLUMN IF NOT EXISTS runner_up TEXT")
+    else:
+        columns = {row["name"] for row in DB.rows(DB.execute(conn, "PRAGMA table_info(early_final_predictions)"))}
+        if "runner_up" not in columns:
+            DB.execute(conn, "ALTER TABLE early_final_predictions ADD COLUMN runner_up TEXT")
+
+    rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT id, champion, runner_up, finalist_a, finalist_b
+            FROM early_final_predictions
+            WHERE runner_up IS NULL OR runner_up = ''
+            """,
+        )
+    )
+    for row in rows:
+        runner_up = row.get("finalist_a") if row.get("finalist_a") != row.get("champion") else row.get("finalist_b")
+        if not runner_up:
+            runner_up = row.get("finalist_b") or row.get("finalist_a") or row.get("champion")
+        DB.execute(conn, "UPDATE early_final_predictions SET runner_up = ? WHERE id = ?", (runner_up, row["id"]))
 
 
 def normalize_phase(raw_phase):
@@ -589,15 +656,12 @@ def is_knockout(match):
 
 
 SCORE_RULES = [
-    ("penalty_exact_winner", "Empate exato + vencedor dos pênaltis", 9),
     ("exact", "Placar exato", 6),
-    ("penalty_exact", "Empate exato no mata-mata", 6),
-    ("penalty_winner", "Empate + vencedor dos pênaltis", 6),
-    ("winner_goal", "Vencedor correto + gols de um time", 4),
-    ("winner", "Vencedor/empate correto", 3),
-    ("penalty_draw", "Empate no mata-mata", 3),
-    ("team_goals", "Gols de um time", 1),
-    ("zero", "0 pontos", 0),
+    ("result_goal_difference", "Resultado e diferença de gols", 4),
+    ("result_team_goals", "Resultado e total de gols de uma equipe", 3),
+    ("result", "Resultado (vencedor ou empate)", 2),
+    ("inverted", "Placar invertido", -2),
+    ("zero", "Placar errado", 0),
 ]
 
 
@@ -614,30 +678,17 @@ def score_prediction_detail(prediction, match):
     pred_outcome = prediction_outcome(ph, pa)
     real_outcome = prediction_outcome(rh, ra)
 
-    if is_knockout(match) and real_outcome == "D":
-        if pred_outcome == "D":
-            exact = ph == rh and pa == ra
-            penalty_correct = prediction.get("advances") and prediction.get("advances") == match.get("penalty_winner")
-            if exact and penalty_correct:
-                return {"points": 9, "rule_key": "penalty_exact_winner", "rule_label": "Empate exato + vencedor dos pênaltis"}
-            if exact:
-                return {"points": 6, "rule_key": "penalty_exact", "rule_label": "Empate exato no mata-mata"}
-            if penalty_correct:
-                return {"points": 6, "rule_key": "penalty_winner", "rule_label": "Empate + vencedor dos pênaltis"}
-            return {"points": 3, "rule_key": "penalty_draw", "rule_label": "Empate no mata-mata"}
-        if ph == rh or pa == ra:
-            return {"points": 1, "rule_key": "team_goals", "rule_label": "Gols de um time"}
-        return {"points": 0, "rule_key": "zero", "rule_label": "0 pontos"}
-
     if ph == rh and pa == ra:
         return {"points": 6, "rule_key": "exact", "rule_label": "Placar exato"}
     if pred_outcome == real_outcome:
+        if ph - pa == rh - ra:
+            return {"points": 4, "rule_key": "result_goal_difference", "rule_label": "Resultado e diferença de gols"}
         if ph == rh or pa == ra:
-            return {"points": 4, "rule_key": "winner_goal", "rule_label": "Vencedor correto + gols de um time"}
-        return {"points": 3, "rule_key": "winner", "rule_label": "Vencedor/empate correto"}
-    if ph == rh or pa == ra:
-        return {"points": 1, "rule_key": "team_goals", "rule_label": "Gols de um time"}
-    return {"points": 0, "rule_key": "zero", "rule_label": "0 pontos"}
+            return {"points": 3, "rule_key": "result_team_goals", "rule_label": "Resultado e total de gols de uma equipe"}
+        return {"points": 2, "rule_key": "result", "rule_label": "Resultado (vencedor ou empate)"}
+    if ph == ra and pa == rh and pred_outcome != "D" and real_outcome != "D":
+        return {"points": -2, "rule_key": "inverted", "rule_label": "Placar invertido"}
+    return {"points": 0, "rule_key": "zero", "rule_label": "Placar errado"}
 
 
 def score_prediction(prediction, match):
@@ -677,7 +728,7 @@ def actual_winner_side(match):
         return "A"
     if away > home:
         return "B"
-    return match.get("penalty_winner")
+    return None
 
 
 def match_closed(match):
@@ -798,6 +849,117 @@ class Resolver:
         }
 
 
+def early_final_lock_at(conn):
+    row = DB.one(DB.execute(conn, "SELECT start_at FROM matches ORDER BY start_at ASC, fifa_number ASC LIMIT 1"))
+    return row["start_at"] if row else None
+
+
+def early_final_team_options(conn):
+    rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT team_a, team_b
+            FROM matches
+            WHERE phase_slug = 'grupos'
+            """,
+        )
+    )
+    teams = set()
+    for row in rows:
+        teams.add(row["team_a"])
+        teams.add(row["team_b"])
+    return sorted(teams, key=normalize_username)
+
+
+def is_reference_team(name):
+    label = (name or "").casefold()
+    return "partida" in label or "colocado" in label
+
+
+def early_final_outcome(conn):
+    matches = fetch_all_matches(conn)
+    final_match = next((match for match in matches if match["phase_slug"] == "final"), None)
+    if not final_match:
+        return {"finalists": [], "champion": None, "runner_up": None, "final_closed": False}
+
+    resolver = Resolver(matches)
+    finalists = []
+    for side in ("A", "B"):
+        payload = resolver.team_payload(final_match, side)
+        if not is_reference_team(payload["name"]):
+            finalists.append(payload["name"])
+
+    champion = None
+    runner_up = None
+    if match_closed(final_match) and len(finalists) == 2:
+        home = int(final_match["result_home"])
+        away = int(final_match["result_away"])
+        if home > away:
+            champion = finalists[0]
+            runner_up = finalists[1]
+        elif away > home:
+            champion = finalists[1]
+            runner_up = finalists[0]
+        elif final_match.get("penalty_winner") == "A":
+            champion = finalists[0]
+            runner_up = finalists[1]
+        elif final_match.get("penalty_winner") == "B":
+            champion = finalists[1]
+            runner_up = finalists[0]
+
+    return {"finalists": finalists, "champion": champion, "runner_up": runner_up, "final_closed": match_closed(final_match)}
+
+
+def score_early_final_prediction(prediction, outcome):
+    if not prediction:
+        return {"points": 0, "champion_hit": False, "runner_up_hit": False}
+
+    champion_hit = bool(outcome.get("champion") and prediction["champion"] == outcome["champion"])
+    runner_up_hit = bool(outcome.get("runner_up") and prediction["runner_up"] == outcome["runner_up"])
+    return {
+        "points": (10 if champion_hit else 0) + (5 if runner_up_hit else 0),
+        "champion_hit": champion_hit,
+        "runner_up_hit": runner_up_hit,
+    }
+
+
+def serialize_early_final_prediction(prediction, outcome=None):
+    if not prediction:
+        return None
+    detail = score_early_final_prediction(prediction, outcome or {"finalists": [], "champion": None, "runner_up": None})
+    return {
+        "champion": prediction["champion"],
+        "runner_up": prediction["runner_up"],
+        "points": int(prediction.get("points") or detail["points"]),
+        "champion_hit": detail["champion_hit"],
+        "runner_up_hit": detail["runner_up_hit"],
+        "created_at": prediction.get("created_at"),
+        "updated_at": prediction.get("updated_at"),
+    }
+
+
+def fetch_early_final_prediction(conn, user_id):
+    if not user_id:
+        return None
+    return DB.one(DB.execute(conn, "SELECT * FROM early_final_predictions WHERE user_id = ?", (user_id,)))
+
+
+def build_early_final_payload(conn, user):
+    lock_at = early_final_lock_at(conn)
+    now = now_brasilia()
+    outcome = early_final_outcome(conn)
+    prediction = fetch_early_final_prediction(conn, user["id"])
+    return {
+        "teams": early_final_team_options(conn),
+        "lock_at": lock_at,
+        "locked": bool(lock_at and now >= parse_dt(lock_at)),
+        "server_now": now.isoformat(timespec="seconds"),
+        "prediction": serialize_early_final_prediction(prediction, outcome),
+        "outcome": outcome,
+    }
+
+
 def effective_status(match, now=None):
     now = now or now_brasilia()
     if match["status"] == "encerrado":
@@ -813,7 +975,6 @@ def serialize_prediction(prediction):
     return {
         "home_score": prediction["home_score"],
         "away_score": prediction["away_score"],
-        "advances": prediction.get("advances"),
         "points": prediction.get("points", 0),
         "updated_at": prediction.get("updated_at"),
     }
@@ -843,7 +1004,6 @@ def serialize_match(match, resolver, prediction=None, user=None, now=None):
         "is_knockout": is_knockout(match),
         "result_home": match.get("result_home"),
         "result_away": match.get("result_away"),
-        "penalty_winner": match.get("penalty_winner"),
         "closed_at": match.get("closed_at"),
         "my_prediction": serialize_prediction(prediction),
     }
@@ -869,6 +1029,50 @@ def recalc_match_points(conn, match_id):
         total_points += points
         DB.execute(conn, "UPDATE predictions SET points = ?, updated_at = ? WHERE id = ?", (points, iso_now(), prediction["id"]))
     return {"predictions": len(predictions), "points": total_points}
+
+
+def recalc_all_points(conn):
+    rows = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                p.id,
+                p.points,
+                p.home_score,
+                p.away_score,
+                m.phase_slug,
+                m.result_home,
+                m.result_away
+            FROM predictions p
+            JOIN matches m ON m.id = p.match_id
+            WHERE m.result_home IS NOT NULL AND m.result_away IS NOT NULL
+            """,
+        )
+    )
+    changed_at = iso_now()
+    changed = 0
+    for row in rows:
+        points = score_prediction(row, row)
+        if int(row.get("points") or 0) == points:
+            continue
+        DB.execute(conn, "UPDATE predictions SET points = ?, updated_at = ? WHERE id = ?", (points, changed_at, row["id"]))
+        changed += 1
+    return changed
+
+
+def recalc_all_early_final_points(conn):
+    outcome = early_final_outcome(conn)
+    predictions = DB.rows(DB.execute(conn, "SELECT * FROM early_final_predictions"))
+    changed_at = iso_now()
+    changed = 0
+    for prediction in predictions:
+        points = score_early_final_prediction(prediction, outcome)["points"]
+        if int(prediction.get("points") or 0) == points:
+            continue
+        DB.execute(conn, "UPDATE early_final_predictions SET points = ?, updated_at = ? WHERE id = ?", (points, changed_at, prediction["id"]))
+        changed += 1
+    return changed
 
 
 def parse_score(value, field_name):
@@ -897,6 +1101,20 @@ def validate_password(password):
     if len(password) < 6:
         raise ValueError("A senha deve ter pelo menos 6 caracteres.")
     return password
+
+
+def validate_early_final_payload(body, teams):
+    valid_teams = set(teams)
+    champion = (body.get("champion") or "").strip()
+    runner_up = (body.get("runner_up") or "").strip()
+
+    if not champion or not runner_up:
+        raise ValueError("Escolha o campeão e o vice-campeão.")
+    if champion not in valid_teams or runner_up not in valid_teams:
+        raise ValueError("Escolha seleções válidas da lista.")
+    if champion == runner_up:
+        raise ValueError("Campeão e vice-campeão precisam ser seleções diferentes.")
+    return champion, runner_up
 
 
 def create_user(username, password, avatar):
@@ -1000,9 +1218,12 @@ def build_ranking(conn):
                 u.avatar_mime,
                 u.avatar_data,
                 COUNT(p.id) AS prediction_count,
-                COALESCE(SUM(p.points), 0) AS points
+                COALESCE(SUM(p.points), 0) AS match_points,
+                COALESCE(MAX(efp.points), 0) AS early_final_points,
+                COALESCE(SUM(p.points), 0) + COALESCE(MAX(efp.points), 0) AS points
             FROM users u
             LEFT JOIN predictions p ON p.user_id = u.id
+            LEFT JOIN early_final_predictions efp ON efp.user_id = u.id
             GROUP BY u.id, u.username, u.active, u.avatar_mime, u.avatar_data
             ORDER BY points DESC, prediction_count DESC, u.username ASC
             """,
@@ -1016,11 +1237,9 @@ def build_ranking(conn):
                 p.user_id,
                 p.home_score,
                 p.away_score,
-                p.advances,
                 m.phase_slug,
                 m.result_home,
-                m.result_away,
-                m.penalty_winner
+                m.result_away
             FROM predictions p
             JOIN matches m ON m.id = p.match_id
             WHERE m.result_home IS NOT NULL AND m.result_away IS NOT NULL
@@ -1030,6 +1249,14 @@ def build_ranking(conn):
     stats_by_user = build_ranking_breakdown(scoring_rows)
     ranking = []
     for index, row in enumerate(rows, start=1):
+        breakdown = stats_by_user.get(row["id"], empty_breakdown())
+        breakdown["specials"] = [
+            {
+                "key": "early_final",
+                "label": "Final adiantada",
+                "points": int(row["early_final_points"] or 0),
+            }
+        ]
         ranking.append(
             {
                 "position": index,
@@ -1038,8 +1265,10 @@ def build_ranking(conn):
                 "active": boolish(row.get("active", True)),
                 "avatar_url": avatar_url(row),
                 "prediction_count": int(row["prediction_count"] or 0),
+                "match_points": int(row["match_points"] or 0),
+                "early_final_points": int(row["early_final_points"] or 0),
                 "points": int(row["points"] or 0),
-                "breakdown": stats_by_user.get(row["id"], empty_breakdown()),
+                "breakdown": breakdown,
             }
         )
     return ranking
@@ -1059,9 +1288,10 @@ def build_admin_users(conn):
                 u.avatar_data,
                 u.created_at,
                 COUNT(p.id) AS prediction_count,
-                COALESCE(SUM(p.points), 0) AS points
+                COALESCE(SUM(p.points), 0) + COALESCE(MAX(efp.points), 0) AS points
             FROM users u
             LEFT JOIN predictions p ON p.user_id = u.id
+            LEFT JOIN early_final_predictions efp ON efp.user_id = u.id
             GROUP BY u.id, u.username, u.is_admin, u.active, u.avatar_mime, u.avatar_data, u.created_at
             ORDER BY u.username ASC
             """,
@@ -1170,6 +1400,8 @@ def build_export_payload(conn):
     users = build_admin_users(conn)
     ranking = build_ranking(conn)
     matches = DB.rows(DB.execute(conn, "SELECT * FROM matches ORDER BY start_at ASC, fifa_number ASC"))
+    for match in matches:
+        match.pop("penalty_winner", None)
     predictions = DB.rows(
         DB.execute(
             conn,
@@ -1188,7 +1420,6 @@ def build_export_payload(conn):
                 m.start_at,
                 p.home_score,
                 p.away_score,
-                p.advances,
                 p.points,
                 p.updated_at
             FROM predictions p
@@ -1198,15 +1429,41 @@ def build_export_payload(conn):
             """,
         )
     )
+    early_final_predictions = DB.rows(
+        DB.execute(
+            conn,
+            """
+            SELECT
+                e.id,
+                e.user_id,
+                u.username,
+                e.champion,
+                e.runner_up,
+                e.points,
+                e.created_at,
+                e.updated_at
+            FROM early_final_predictions e
+            JOIN users u ON u.id = e.user_id
+            ORDER BY u.username ASC
+            """,
+        )
+    )
     audits = fetch_result_audits(conn, limit=10000)
     return {
         "generated_at": iso_now(),
         "users": users,
         "matches": matches,
         "predictions": predictions,
+        "early_final_predictions": early_final_predictions,
         "ranking": ranking,
         "result_audits": audits,
     }
+
+
+def format_export_result(home, away):
+    if home is None or away is None:
+        return "sem resultado"
+    return f"{home}x{away}"
 
 
 def export_payload_as_csv(payload):
@@ -1232,12 +1489,15 @@ def export_payload_as_csv(payload):
         "status",
         "result_home",
         "result_away",
-        "penalty_winner",
         "prediction_home",
         "prediction_away",
-        "prediction_advances",
         "prediction_points",
         "prediction_updated_at",
+        "early_champion",
+        "early_runner_up",
+        "early_points",
+        "early_created_at",
+        "early_updated_at",
         "audit_action",
         "audit_admin",
         "audit_changed_at",
@@ -1289,7 +1549,6 @@ def export_payload_as_csv(payload):
                 "status": match["status"],
                 "result_home": match.get("result_home"),
                 "result_away": match.get("result_away"),
-                "penalty_winner": match.get("penalty_winner"),
             }
         )
     for prediction in payload["predictions"]:
@@ -1308,9 +1567,21 @@ def export_payload_as_csv(payload):
                 "start_at": prediction["start_at"],
                 "prediction_home": prediction["home_score"],
                 "prediction_away": prediction["away_score"],
-                "prediction_advances": prediction.get("advances"),
                 "prediction_points": prediction["points"],
                 "prediction_updated_at": prediction["updated_at"],
+            }
+        )
+    for prediction in payload["early_final_predictions"]:
+        writer.writerow(
+            {
+                "section": "early_final_predictions",
+                "user_id": prediction["user_id"],
+                "username": prediction["username"],
+                "early_champion": prediction["champion"],
+                "early_runner_up": prediction["runner_up"],
+                "early_points": prediction["points"],
+                "early_created_at": prediction["created_at"],
+                "early_updated_at": prediction["updated_at"],
             }
         )
     for audit in payload["result_audits"]:
@@ -1328,8 +1599,8 @@ def export_payload_as_csv(payload):
                 "audit_action": audit["action"],
                 "audit_admin": audit["admin_username"],
                 "audit_changed_at": audit["changed_at"],
-                "audit_old_result": f"{audit.get('old_result_home')}x{audit.get('old_result_away')} {audit.get('old_penalty_winner') or ''}".strip(),
-                "audit_new_result": f"{audit.get('new_result_home')}x{audit.get('new_result_away')} {audit.get('new_penalty_winner') or ''}".strip(),
+                "audit_old_result": format_export_result(audit.get("old_result_home"), audit.get("old_result_away")),
+                "audit_new_result": format_export_result(audit.get("new_result_home"), audit.get("new_result_away")),
             }
         )
     return output.getvalue()
@@ -1396,6 +1667,54 @@ def handle_api(req, start_response):
         with DB.connect() as conn:
             ranking = build_ranking(conn)
         return json_response(start_response, {"ok": True, "ranking": ranking})
+
+    if req.path == "/api/early-final" and req.method == "GET":
+        user, error = require_user(req, start_response)
+        if error:
+            return error
+        with DB.connect() as conn:
+            payload = build_early_final_payload(conn, user)
+        return json_response(start_response, {"ok": True, **payload})
+
+    if req.path == "/api/early-final" and req.method == "POST":
+        user, error = require_user(req, start_response)
+        if error:
+            return error
+        body = req.json()
+        with DB.connect() as conn:
+            lock_at = early_final_lock_at(conn)
+            if lock_at and now_brasilia() >= parse_dt(lock_at):
+                return json_error(
+                    start_response,
+                    f"Final adiantada fechada desde {parse_dt(lock_at).strftime('%d/%m/%Y às %H:%M')}.",
+                    409,
+                    "final_adiantada_fechada",
+                )
+            teams = early_final_team_options(conn)
+            try:
+                champion, runner_up = validate_early_final_payload(body, teams)
+            except ValueError as exc:
+                return json_error(start_response, str(exc), 400, "final_adiantada_invalida")
+            now = iso_now()
+            DB.execute(
+                conn,
+                """
+                INSERT INTO early_final_predictions (user_id, champion, runner_up, finalist_a, finalist_b, points, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(user_id)
+                DO UPDATE SET
+                    champion = excluded.champion,
+                    runner_up = excluded.runner_up,
+                    finalist_a = excluded.finalist_a,
+                    finalist_b = excluded.finalist_b,
+                    updated_at = excluded.updated_at
+                """,
+                (user["id"], champion, runner_up, champion, runner_up, now, now),
+            )
+            recalc_all_early_final_points(conn)
+            conn.commit()
+            payload = build_early_final_payload(conn, user)
+        return json_response(start_response, {"ok": True, "message": "Final adiantada salva.", **payload})
 
     if req.path == "/api/admin/users" and req.method == "GET":
         _, error = require_admin(req, start_response)
@@ -1531,7 +1850,7 @@ def handle_api(req, start_response):
                 DB.execute(
                     conn,
                     """
-                    SELECT u.username, u.avatar_mime, u.avatar_data, p.home_score, p.away_score, p.advances, p.points, p.updated_at
+                    SELECT u.username, u.avatar_mime, u.avatar_data, p.home_score, p.away_score, p.points, p.updated_at
                     FROM predictions p
                     JOIN users u ON u.id = p.user_id
                     WHERE p.match_id = ?
@@ -1579,11 +1898,7 @@ def handle_api(req, start_response):
             try:
                 home_score = parse_score(body.get("home_score"), "time A")
                 away_score = parse_score(body.get("away_score"), "time B")
-                advances = body.get("advances") if body.get("advances") in {"A", "B"} else None
-                if is_knockout(match) and home_score == away_score and not advances:
-                    raise ValueError("Em empate no mata-mata, escolha quem avança.")
-                if home_score != away_score:
-                    advances = None
+                advances = None
             except ValueError as exc:
                 return json_error(start_response, str(exc), 400, "palpite_invalido")
             DB.execute(
@@ -1623,11 +1938,7 @@ def handle_api(req, start_response):
             try:
                 home = parse_score(body.get("result_home"), "time A")
                 away = parse_score(body.get("result_away"), "time B")
-                penalty_winner = body.get("penalty_winner") if body.get("penalty_winner") in {"A", "B"} else None
-                if is_knockout(match) and home == away and not penalty_winner:
-                    raise ValueError("Em empate no mata-mata, informe quem avançou nos pênaltis.")
-                if home != away:
-                    penalty_winner = None
+                penalty_winner = None
             except ValueError as exc:
                 return json_error(start_response, str(exc), 400, "resultado_invalido")
 
@@ -1656,6 +1967,7 @@ def handle_api(req, start_response):
                 (home, away, penalty_winner, closed_at, closed_at, match_id),
             )
             summary = recalc_match_points(conn, match_id)
+            early_final_changed = recalc_all_early_final_points(conn)
             conn.commit()
         return json_response(
             start_response,
@@ -1663,6 +1975,7 @@ def handle_api(req, start_response):
                 "ok": True,
                 "message": "Resultado salvo. Ranking recalculado.",
                 "recalculated": summary,
+                "early_final_recalculated": early_final_changed,
                 "admin": public_user(user),
             },
         )
@@ -1703,8 +2016,16 @@ def handle_api(req, start_response):
                 (changed_at, match_id),
             )
             DB.execute(conn, "UPDATE predictions SET points = 0, updated_at = ? WHERE match_id = ?", (changed_at, match_id))
+            early_final_changed = recalc_all_early_final_points(conn)
             conn.commit()
-        return json_response(start_response, {"ok": True, "message": "Resultado reaberto. Pontos removidos desta partida."})
+        return json_response(
+            start_response,
+            {
+                "ok": True,
+                "message": "Resultado reaberto. Pontos removidos desta partida.",
+                "early_final_recalculated": early_final_changed,
+            },
+        )
 
     return json_error(start_response, "Rota não encontrada.", 404, "rota_nao_encontrada")
 

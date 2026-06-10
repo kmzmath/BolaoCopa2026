@@ -93,6 +93,16 @@ class ApiTest(unittest.TestCase):
         with bolao.DB.connect() as conn:
             return bolao.DB.one(bolao.DB.execute(conn, "SELECT id FROM matches ORDER BY start_at LIMIT 1"))["id"]
 
+    def first_knockout_match_id(self):
+        with bolao.DB.connect() as conn:
+            return bolao.DB.one(
+                bolao.DB.execute(conn, "SELECT id FROM matches WHERE phase_slug != 'grupos' ORDER BY start_at LIMIT 1")
+            )["id"]
+
+    def final_match_id(self):
+        with bolao.DB.connect() as conn:
+            return bolao.DB.one(bolao.DB.execute(conn, "SELECT id FROM matches WHERE phase_slug = 'final' LIMIT 1"))["id"]
+
     def set_match_start(self, match_id, when):
         with bolao.DB.connect() as conn:
             bolao.DB.execute(
@@ -159,7 +169,7 @@ class ApiTest(unittest.TestCase):
 
         status, data, _ = self.admin.post(
             f"/api/admin/matches/{match_id}/result",
-            {"result_home": 3, "result_away": 1},
+            {"result_home": 3, "result_away": 2},
         )
         self.assertEqual(status, 200, data)
         status, data, _ = self.admin.get("/api/ranking")
@@ -170,6 +180,71 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 200, data)
         self.assertGreaterEqual(len(data["audits"]), 2)
         self.assertEqual(data["audits"][0]["action"], "save_result")
+
+    def test_early_final_locks_at_first_match_and_scores_ranking(self):
+        player, user = self.register_player()
+        first_match = self.first_match_id()
+        final_match = self.final_match_id()
+        self.set_match_start(first_match, bolao.now_brasilia() + timedelta(hours=2))
+
+        status, data, _ = player.get("/api/early-final")
+        self.assertEqual(status, 200, data)
+        self.assertFalse(data["locked"])
+        self.assertIn("Brasil", data["teams"])
+
+        status, data, _ = player.post(
+            "/api/early-final",
+            {"champion": "Brasil", "runner_up": "Argentina"},
+        )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["prediction"]["champion"], "Brasil")
+        self.assertEqual(data["prediction"]["runner_up"], "Argentina")
+
+        with bolao.DB.connect() as conn:
+            bolao.DB.execute(
+                conn,
+                "UPDATE matches SET team_a = 'Brasil', team_b = 'Argentina', result_home = NULL, result_away = NULL, status = 'agendado' WHERE id = ?",
+                (final_match,),
+            )
+            conn.commit()
+
+        status, data, _ = self.admin.post(
+            f"/api/admin/matches/{final_match}/result",
+            {"result_home": 2, "result_away": 1},
+        )
+        self.assertEqual(status, 200, data)
+
+        status, data, _ = self.admin.get("/api/ranking")
+        player_rank = next(row for row in data["ranking"] if row["id"] == user["id"])
+        self.assertEqual(player_rank["early_final_points"], 15)
+        self.assertEqual(player_rank["points"], 15)
+
+        self.set_match_start(first_match, bolao.now_brasilia() - timedelta(minutes=1))
+        status, data, _ = player.post(
+            "/api/early-final",
+            {"champion": "Argentina", "runner_up": "Brasil"},
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(data["code"], "final_adiantada_fechada")
+
+    def test_knockout_draw_does_not_require_advancing_team(self):
+        player, user = self.register_player()
+        match_id = self.first_knockout_match_id()
+        self.set_match_start(match_id, bolao.now_brasilia() + timedelta(hours=2))
+
+        status, data, _ = player.post(f"/api/predictions/{match_id}", {"home_score": 1, "away_score": 1})
+        self.assertEqual(status, 200, data)
+        self.assertNotIn("advances", data["prediction"])
+
+        status, data, _ = self.admin.post(
+            f"/api/admin/matches/{match_id}/result",
+            {"result_home": 1, "result_away": 1},
+        )
+        self.assertEqual(status, 200, data)
+
+        status, data, _ = self.admin.get("/api/ranking")
+        player_rank = next(row for row in data["ranking"] if row["id"] == user["id"])
+        self.assertEqual(player_rank["points"], 6)
 
     def test_admin_can_rename_reset_password_and_disable_user(self):
         _, user = self.register_player("Carlos", "senha123")
@@ -209,6 +284,7 @@ class ApiTest(unittest.TestCase):
         self.assertIn("users", data)
         self.assertIn("matches", data)
         self.assertIn("predictions", data)
+        self.assertIn("early_final_predictions", data)
         self.assertIn("ranking", data)
 
         status, data, headers = self.admin.get("/api/admin/export/csv")
