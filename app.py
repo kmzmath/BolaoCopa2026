@@ -1224,9 +1224,11 @@ def build_ranking(conn):
             FROM users u
             LEFT JOIN predictions p ON p.user_id = u.id
             LEFT JOIN early_final_predictions efp ON efp.user_id = u.id
+            WHERE u.active = ?
             GROUP BY u.id, u.username, u.active, u.avatar_mime, u.avatar_data
             ORDER BY points DESC, prediction_count DESC, u.username ASC
             """,
+            (True,),
         )
     )
     scoring_rows = DB.rows(
@@ -1242,8 +1244,11 @@ def build_ranking(conn):
                 m.result_away
             FROM predictions p
             JOIN matches m ON m.id = p.match_id
+            JOIN users u ON u.id = p.user_id
             WHERE m.result_home IS NOT NULL AND m.result_away IS NOT NULL
+              AND u.active = ?
             """,
+            (True,),
         )
     )
     stats_by_user = build_ranking_breakdown(scoring_rows)
@@ -1288,7 +1293,11 @@ def build_admin_users(conn):
                 u.avatar_data,
                 u.created_at,
                 COUNT(p.id) AS prediction_count,
-                COALESCE(SUM(p.points), 0) + COALESCE(MAX(efp.points), 0) AS points
+                COALESCE(SUM(p.points), 0) + COALESCE(MAX(efp.points), 0) AS points,
+                MAX(efp.champion) AS early_final_champion,
+                MAX(efp.runner_up) AS early_final_runner_up,
+                COALESCE(MAX(efp.points), 0) AS early_final_points,
+                MAX(efp.updated_at) AS early_final_updated_at
             FROM users u
             LEFT JOIN predictions p ON p.user_id = u.id
             LEFT JOIN early_final_predictions efp ON efp.user_id = u.id
@@ -1307,6 +1316,13 @@ def build_admin_users(conn):
             "created_at": row["created_at"],
             "prediction_count": int(row["prediction_count"] or 0),
             "points": int(row["points"] or 0),
+            "early_final": {
+                "submitted": bool(row.get("early_final_champion") and row.get("early_final_runner_up")),
+                "champion": row.get("early_final_champion"),
+                "runner_up": row.get("early_final_runner_up"),
+                "points": int(row["early_final_points"] or 0),
+                "updated_at": row.get("early_final_updated_at"),
+            },
         }
         for row in rows
     ]

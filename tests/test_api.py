@@ -227,6 +227,27 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertEqual(data["code"], "final_adiantada_fechada")
 
+    def test_admin_users_show_early_final_submitted_and_missing(self):
+        player_with_final, user_with_final = self.register_player("Com Final", "senha123")
+        _, user_missing_final = self.register_player("Sem Final", "senha123")
+        first_match = self.first_match_id()
+        self.set_match_start(first_match, bolao.now_brasilia() + timedelta(hours=2))
+
+        status, data, _ = player_with_final.post(
+            "/api/early-final",
+            {"champion": "Brasil", "runner_up": "Argentina"},
+        )
+        self.assertEqual(status, 200, data)
+
+        status, data, _ = self.admin.get("/api/admin/users")
+        self.assertEqual(status, 200, data)
+        users = {row["id"]: row for row in data["users"]}
+
+        self.assertTrue(users[user_with_final["id"]]["early_final"]["submitted"])
+        self.assertEqual(users[user_with_final["id"]]["early_final"]["champion"], "Brasil")
+        self.assertEqual(users[user_with_final["id"]]["early_final"]["runner_up"], "Argentina")
+        self.assertFalse(users[user_missing_final["id"]]["early_final"]["submitted"])
+
     def test_knockout_draw_does_not_require_advancing_team(self):
         player, user = self.register_player()
         match_id = self.first_knockout_match_id()
@@ -261,6 +282,11 @@ class ApiTest(unittest.TestCase):
 
         status, data, _ = self.admin.post(f"/api/admin/users/{user['id']}/active", {"active": False})
         self.assertEqual(status, 200, data)
+
+        status, ranking_data, _ = self.admin.get("/api/ranking")
+        self.assertEqual(status, 200, ranking_data)
+        self.assertFalse(any(row["id"] == user["id"] for row in ranking_data["ranking"]))
+
         inactive_login = ApiClient()
         status, data, _ = inactive_login.post(
             "/api/auth/login",
@@ -276,6 +302,10 @@ class ApiTest(unittest.TestCase):
             {"username": "Carlos Novo", "password": "nova123"},
         )
         self.assertEqual(status, 200, data)
+
+        status, ranking_data, _ = self.admin.get("/api/ranking")
+        self.assertEqual(status, 200, ranking_data)
+        self.assertTrue(any(row["id"] == user["id"] for row in ranking_data["ranking"]))
 
     def test_admin_exports_json_and_csv(self):
         self.register_player("Exportador", "senha123")

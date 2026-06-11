@@ -5,6 +5,7 @@ const state = {
   scope: "upcoming",
   scopeAnimation: null,
   expandedRankingId: null,
+  avatarPreviewUserId: null,
   adminView: "results",
   matches: [],
   ranking: [],
@@ -215,6 +216,11 @@ function bindUi() {
     showAuth();
   });
 
+  $("#profile-button").addEventListener("click", () => {
+    state.activeTab = "profile";
+    renderTabs();
+  });
+
   $("#profile-photo").addEventListener("change", () => {
     const file = $("#profile-photo").files[0];
     if (!file) {
@@ -311,13 +317,20 @@ function bindUi() {
   $("#matches-list").addEventListener("input", handlePredictionInput);
   $("#early-final-panel").addEventListener("submit", handleEarlyFinalSubmit);
   $("#ranking-list").addEventListener("click", handleRankingClick);
+  $("#ranking-list").addEventListener("keydown", handleRankingKeydown);
   $("#admin-list").addEventListener("click", handleAdminClick);
   $("#admin-list").addEventListener("input", handleResultInput);
   $("#panel-admin").addEventListener("click", handleAdminPanelClick);
   $("#details-modal").addEventListener("click", handleDetailsClick);
+  $("#avatar-modal").addEventListener("click", handleAvatarModalClick);
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.details.matchId) closeDetails();
+    if (event.key !== "Escape") return;
+    if (state.avatarPreviewUserId) {
+      closeAvatarModal();
+      return;
+    }
+    if (state.details.matchId) closeDetails();
   });
 
   setInterval(() => {
@@ -438,6 +451,7 @@ async function loadAdminUsers() {
   const data = await api("/api/admin/users");
   state.adminUsers = data.users;
   renderAdminUsers();
+  renderAdminFinal();
 }
 
 async function loadResultAudits() {
@@ -467,6 +481,7 @@ async function api(path, options = {}) {
 
 function renderTabs() {
   $$(".main-tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === state.activeTab));
+  $("#profile-button")?.classList.toggle("active", state.activeTab === "profile");
   $$(".panel").forEach((panel) => panel.classList.remove("active"));
   const panel = $(`#panel-${state.activeTab}`);
   if (panel) panel.classList.add("active");
@@ -609,6 +624,7 @@ async function handleEarlyFinalSubmit(event) {
     state.earlyFinal = data;
     renderEarlyFinal();
     await loadRanking(false);
+    if (state.user?.is_admin) await loadAdminUsers(false);
     showToast(data.message || "Final salva.");
   } catch (error) {
     showToast(error.message, "error");
@@ -1158,9 +1174,9 @@ function renderRanking() {
     .map(
       (row) => `
         <div class="ranking-item">
-          <button type="button" class="ranking-row ${state.expandedRankingId === row.id ? "expanded" : ""}" data-user-id="${row.id}">
+          <div class="ranking-row ${state.expandedRankingId === row.id ? "expanded" : ""}" data-user-id="${row.id}" role="button" tabindex="0">
             <div class="rank-position">${row.position}</div>
-            ${avatarHtml(row, "avatar rank-avatar")}
+            ${rankingAvatarHtml(row)}
             <div>
               <strong>${escapeHtml(row.username)}</strong>
             </div>
@@ -1168,7 +1184,7 @@ function renderRanking() {
             <div class="rank-stats">
               <strong>${row.points}</strong>
             </div>
-          </button>
+          </div>
           <div class="ranking-details ${state.expandedRankingId === row.id ? "" : "hidden"}">
             ${rankingBreakdown(row)}
           </div>
@@ -1179,12 +1195,71 @@ function renderRanking() {
   `;
 }
 
+function rankingAvatarHtml(row) {
+  if (!row.avatar_url) {
+    return avatarHtml(row, "avatar rank-avatar");
+  }
+  return `
+    <button type="button" class="ranking-avatar-button" data-avatar-user-id="${row.id}" aria-label="Ampliar foto de ${escapeHtml(row.username)}">
+      ${avatarHtml(row, "avatar rank-avatar")}
+    </button>
+  `;
+}
+
 function handleRankingClick(event) {
+  const avatarButton = event.target.closest(".ranking-avatar-button");
+  if (avatarButton) {
+    openRankingAvatar(Number(avatarButton.dataset.avatarUserId));
+    return;
+  }
   const row = event.target.closest(".ranking-row");
   if (!row) return;
-  const userId = Number(row.dataset.userId);
+  toggleRankingRow(Number(row.dataset.userId));
+}
+
+function handleRankingKeydown(event) {
+  if (!["Enter", " "].includes(event.key)) return;
+  if (event.target.closest(".ranking-avatar-button")) return;
+  const row = event.target.closest(".ranking-row");
+  if (!row) return;
+  event.preventDefault();
+  toggleRankingRow(Number(row.dataset.userId));
+}
+
+function toggleRankingRow(userId) {
   state.expandedRankingId = state.expandedRankingId === userId ? null : userId;
   renderRanking();
+}
+
+function openRankingAvatar(userId) {
+  const user = state.ranking.find((row) => row.id === userId);
+  if (!user?.avatar_url) return;
+  state.avatarPreviewUserId = userId;
+  renderAvatarModal();
+}
+
+function closeAvatarModal() {
+  state.avatarPreviewUserId = null;
+  $("#avatar-modal").classList.add("hidden");
+}
+
+function handleAvatarModalClick(event) {
+  if (event.target.closest("[data-close-avatar]")) {
+    closeAvatarModal();
+  }
+}
+
+function renderAvatarModal() {
+  const user = state.ranking.find((row) => row.id === state.avatarPreviewUserId);
+  if (!user?.avatar_url) {
+    closeAvatarModal();
+    return;
+  }
+  $("#avatar-title").textContent = user.username;
+  const image = $("#avatar-preview-image");
+  image.src = user.avatar_url;
+  image.alt = `Foto de ${user.username}`;
+  $("#avatar-modal").classList.remove("hidden");
 }
 
 function rankingBreakdown(row) {
@@ -1228,11 +1303,14 @@ function renderAdmin() {
   });
   const list = $("#admin-list");
   const users = $("#admin-users");
+  const final = $("#admin-final");
   const audit = $("#admin-audit");
   list.classList.toggle("hidden", state.adminView !== "results");
   users.classList.toggle("hidden", state.adminView !== "users");
+  final.classList.toggle("hidden", state.adminView !== "final");
   audit.classList.toggle("hidden", state.adminView !== "audit");
   renderAdminUsers();
+  renderAdminFinal();
   renderAdminAudit();
   if (state.adminView !== "results") return;
   const matches = state.matches.slice().sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
@@ -1281,6 +1359,88 @@ function renderAdminUsers() {
       `;
     })
     .join("");
+}
+
+function renderAdminFinal() {
+  const container = $("#admin-final");
+  if (!container || !state.user?.is_admin) return;
+  const activeUsers = state.adminUsers.filter((user) => user.active);
+  const submitted = activeUsers.filter((user) => user.early_final?.submitted);
+  const missing = activeUsers.filter((user) => !user.early_final?.submitted);
+  container.innerHTML = `
+    <div class="admin-final-summary">
+      <div>
+        <span>Enviaram</span>
+        <strong>${submitted.length}</strong>
+      </div>
+      <div>
+        <span>Faltam</span>
+        <strong>${missing.length}</strong>
+      </div>
+      <div>
+        <span>Total ativo</span>
+        <strong>${activeUsers.length}</strong>
+      </div>
+    </div>
+    <div class="admin-final-columns">
+      ${adminFinalList("JÃ¡ colocaram a Final", submitted, true)}
+      ${adminFinalList("Faltam colocar a Final", missing, false)}
+    </div>
+  `;
+}
+
+function adminFinalList(title, users, submitted) {
+  return `
+    <section class="admin-final-list">
+      <div class="admin-final-list-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${users.length}</span>
+      </div>
+      ${
+        users.length
+          ? users.map((user) => adminFinalRow(user, submitted)).join("")
+          : `<div class="empty-state">${submitted ? "NinguÃ©m enviou ainda." : "Todos os participantes ativos enviaram."}</div>`
+      }
+    </section>
+  `;
+}
+
+function adminFinalRow(user, submitted) {
+  return `
+    <article class="admin-final-row">
+      ${avatarHtml(user, "avatar user-avatar")}
+      <div>
+        <strong>${escapeHtml(user.username)}</strong>
+        ${
+          submitted
+            ? `<span>Atualizado em ${formatDateTime(user.early_final.updated_at)}</span>`
+            : `<span>Ainda nÃ£o salvou</span>`
+        }
+      </div>
+      ${
+        submitted
+          ? `<div class="admin-final-picks">
+              ${adminFinalPick("CampeÃ£o", user.early_final.champion)}
+              ${adminFinalPick("Vice", user.early_final.runner_up)}
+            </div>`
+          : ""
+      }
+    </article>
+  `;
+}
+
+function adminFinalPick(label, teamName) {
+  const code = flagCodeForTeam(teamName);
+  const flag = code
+    ? `<img src="https://flagcdn.com/w40/${code}.png" alt="" loading="lazy" />`
+    : `<span class="flag-fallback">${escapeHtml(teamInitials(teamName))}</span>`;
+  return `
+    <span class="admin-final-pick">
+      <small>${escapeHtml(label)}</small>
+      ${flag}
+      <strong>${escapeHtml(teamName)}</strong>
+    </span>
+  `;
 }
 
 function renderAdminAudit() {
@@ -1423,6 +1583,7 @@ async function renameAdminUser(userId, card) {
     await loadRanking(false);
     renderUserChrome();
     renderAdminUsers();
+    renderAdminFinal();
     showToast(data.message || "Usuário renomeado.");
   } catch (error) {
     showToast(error.message, "error");
@@ -1447,6 +1608,7 @@ async function setAdminUserActive(userId, active) {
     state.adminUsers = data.users;
     await loadRanking(false);
     renderAdminUsers();
+    renderAdminFinal();
     showToast(data.message || "Usuário atualizado.");
   } catch (error) {
     showToast(error.message, "error");

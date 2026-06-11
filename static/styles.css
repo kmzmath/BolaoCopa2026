@@ -166,6 +166,7 @@ p {
 .main-tab:hover,
 .admin-tab:hover,
 .filter-button:hover,
+.profile-action:hover,
 .ghost-action:hover,
 .icon-action:hover,
 .small-action:hover {
@@ -177,6 +178,7 @@ p {
 .main-tab.active,
 .admin-tab.active,
 .filter-button.active,
+.profile-action.active,
 .details-tab.active {
   background: rgba(138, 63, 252, 0.22);
   border-color: rgba(138, 63, 252, 0.74);
@@ -242,6 +244,7 @@ button:focus-visible {
 }
 
 .primary-action,
+.profile-action,
 .ghost-action,
 .icon-action,
 .small-action,
@@ -259,6 +262,7 @@ button:focus-visible {
 }
 
 .primary-action span,
+.profile-action span,
 .ghost-action span,
 .small-action span,
 .danger-action span,
@@ -281,6 +285,7 @@ button:focus-visible {
 
 .primary-action:active,
 .small-action:active,
+.profile-action:active,
 .ghost-action:active,
 .icon-action:active,
 .danger-action:active,
@@ -294,12 +299,17 @@ button:focus-visible {
   animation: buttonBump 360ms ease both;
 }
 
+.profile-action,
 .ghost-action,
 .icon-action,
 .small-action {
   background: var(--surface-2);
   color: var(--soft);
   border: 1px solid var(--line);
+}
+
+.profile-action {
+  padding-left: 8px;
 }
 
 .danger-action {
@@ -1015,6 +1025,7 @@ main {
   min-height: 66px;
   color: inherit;
   text-align: left;
+  cursor: pointer;
   transition:
     background 160ms ease,
     border-color 160ms ease,
@@ -1025,6 +1036,11 @@ main {
 .ranking-row.expanded {
   border-color: rgba(138, 63, 252, 0.36);
   background: rgba(24, 28, 36, 0.98);
+}
+
+.ranking-row:focus-visible {
+  outline: 3px solid rgba(138, 63, 252, 0.26);
+  outline-offset: 2px;
 }
 
 .rank-position {
@@ -1043,6 +1059,30 @@ main {
   width: 54px;
   height: 54px;
   font-size: 1rem;
+}
+
+.ranking-avatar-button {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.ranking-avatar-button .rank-avatar {
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.ranking-avatar-button:hover .rank-avatar,
+.ranking-avatar-button:focus-visible .rank-avatar {
+  border-color: rgba(138, 63, 252, 0.76);
+  box-shadow: 0 0 0 3px rgba(138, 63, 252, 0.18);
+  transform: scale(1.03);
 }
 
 .rank-predictions {
@@ -1205,6 +1245,35 @@ main {
   min-height: 0;
   overflow: auto;
   padding: 18px;
+}
+
+.avatar-modal-panel {
+  width: min(100%, 420px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.avatar-preview-content {
+  padding: 18px;
+  display: grid;
+  place-items: center;
+}
+
+.avatar-preview-frame {
+  width: min(100%, 340px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #0b0d12;
+  border: 1px solid var(--line);
+}
+
+.avatar-preview-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0b0d12;
 }
 
 .details-meta {
@@ -1462,6 +1531,9 @@ th:first-child {
 }
 
 .admin-export,
+.admin-final-summary div,
+.admin-final-list,
+.admin-final-row,
 .admin-user-card,
 .audit-row {
   border: 1px solid var(--line);
@@ -1478,12 +1550,17 @@ th:first-child {
 }
 
 .admin-export strong,
+.admin-final-list-head strong,
+.admin-final-row strong,
 .admin-user-main strong,
 .audit-row strong {
   color: var(--ink);
 }
 
 .admin-export span,
+.admin-final-summary span,
+.admin-final-list-head span,
+.admin-final-row span,
 .admin-user-main span,
 .admin-user-stats span,
 .audit-row span {
@@ -1506,9 +1583,123 @@ th:first-child {
 }
 
 .admin-users,
+.admin-final,
 .audit-list {
   display: grid;
   gap: 10px;
+}
+
+.admin-final-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-final-summary div {
+  padding: 12px;
+}
+
+.admin-final-summary strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--accent-2);
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.admin-final-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.admin-final-list {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.admin-final-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-final-list-head span {
+  min-width: 28px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(138, 63, 252, 0.18);
+  color: #d8bcff;
+  font-weight: 950;
+}
+
+.admin-final-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(150px, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.admin-final-picks {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-final-pick {
+  display: inline-grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-areas:
+    "label label"
+    "flag team";
+  align-items: center;
+  gap: 3px 6px;
+  min-width: 94px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(138, 63, 252, 0.10);
+  border: 1px solid rgba(138, 63, 252, 0.18);
+}
+
+.admin-final-pick small {
+  grid-area: label;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.admin-final-pick img,
+.admin-final-pick .flag-fallback {
+  grid-area: flag;
+  width: 24px;
+  height: 18px;
+  border-radius: 3px;
+  object-fit: cover;
+  background: #202530;
+}
+
+.admin-final-pick .flag-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 950;
+}
+
+.admin-final-pick strong {
+  grid-area: team;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
 }
 
 .admin-user-card {
@@ -1601,6 +1792,16 @@ th:first-child {
     gap: 6px;
   }
 
+  .profile-action {
+    min-height: 40px;
+    gap: 6px;
+    padding: 0 8px 0 6px;
+  }
+
+  .profile-action span:last-child {
+    font-size: 0.82rem;
+  }
+
   .topbar-actions .ghost-action {
     width: 40px;
     padding: 0;
@@ -1646,6 +1847,20 @@ th:first-child {
   .filter-buttons {
     gap: 12px;
     padding: 10px;
+  }
+
+  .admin-final-summary,
+  .admin-final-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-final-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .admin-final-picks {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .filter-grid {
@@ -1727,6 +1942,11 @@ th:first-child {
     height: 44px;
   }
 
+  .ranking-avatar-button {
+    width: 44px;
+    height: 44px;
+  }
+
   .rank-position {
     width: 28px;
     height: 28px;
@@ -1771,6 +1991,10 @@ th:first-child {
     max-height: calc(100dvh - 16px);
   }
 
+  .avatar-modal-panel {
+    width: min(100%, 380px);
+  }
+
   .modal-head {
     min-height: 52px;
     padding-inline: 12px;
@@ -1781,6 +2005,10 @@ th:first-child {
   }
 
   .details-content {
+    padding: 12px;
+  }
+
+  .avatar-preview-content {
     padding: 12px;
   }
 
@@ -1862,6 +2090,14 @@ th:first-child {
     height: 30px;
   }
 
+  .profile-action {
+    padding-inline: 5px 7px;
+  }
+
+  .profile-action span:last-child {
+    font-size: 0.76rem;
+  }
+
   .main-tab {
     font-size: 0.7rem;
   }
@@ -1920,6 +2156,11 @@ th:first-child {
   }
 
   .rank-avatar {
+    width: 38px;
+    height: 38px;
+  }
+
+  .ranking-avatar-button {
     width: 38px;
     height: 38px;
   }

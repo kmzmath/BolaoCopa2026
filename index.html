@@ -70,7 +70,10 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <span id="topbar-avatar" class="avatar avatar-small"></span>
+          <button type="button" id="profile-button" class="profile-action" title="Perfil">
+            <span id="topbar-avatar" class="avatar avatar-small"></span>
+            <span>Perfil</span>
+          </button>
           <button type="button" id="logout-button" class="ghost-action" title="Sair">
             <span aria-hidden="true">×</span>
             <span>Sair</span>
@@ -82,7 +85,6 @@
         <button type="button" class="main-tab active" data-tab="predictions">Palpites</button>
         <button type="button" class="main-tab" data-tab="early-final">Final</button>
         <button type="button" class="main-tab" data-tab="ranking">Ranking</button>
-        <button type="button" class="main-tab" data-tab="profile">Perfil</button>
         <button type="button" class="main-tab" data-tab="rules">Regras</button>
         <button type="button" class="main-tab admin-only hidden" data-tab="admin">Admin</button>
       </nav>
@@ -219,10 +221,12 @@
             <div class="admin-tabs" role="tablist" aria-label="Administração">
               <button type="button" class="admin-tab active" data-admin-view="results">Resultados</button>
               <button type="button" class="admin-tab" data-admin-view="users">Usuários</button>
+              <button type="button" class="admin-tab" data-admin-view="final">Final</button>
               <button type="button" class="admin-tab" data-admin-view="audit">Auditoria</button>
             </div>
           </div>
           <div id="admin-users" class="admin-users hidden"></div>
+          <div id="admin-final" class="admin-final hidden"></div>
           <div id="admin-audit" class="admin-audit hidden"></div>
           <div id="admin-list" class="match-list"></div>
         </section>
@@ -243,6 +247,23 @@
           <button type="button" class="details-tab" data-details-tab="stats">Estatísticas</button>
         </div>
         <div id="details-content" class="details-content"></div>
+      </section>
+    </div>
+
+    <div id="avatar-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="avatar-title">
+      <div class="modal-backdrop" data-close-avatar></div>
+      <section class="modal-panel avatar-modal-panel">
+        <header class="modal-head">
+          <h2 id="avatar-title">Foto</h2>
+          <button type="button" class="icon-action close-details" data-close-avatar title="Fechar">
+            <span aria-hidden="true">Ã—</span>
+          </button>
+        </header>
+        <div class="avatar-preview-content">
+          <div class="avatar-preview-frame">
+            <img id="avatar-preview-image" src="" alt="" />
+          </div>
+        </div>
       </section>
     </div>
   </body>
