@@ -122,6 +122,7 @@ def init_db():
                     active BOOLEAN NOT NULL DEFAULT TRUE,
                     avatar_mime TEXT,
                     avatar_data TEXT,
+                    avatar_updated_at TEXT,
                     created_at TEXT NOT NULL
                 )
                 """,
@@ -177,6 +178,7 @@ def init_db():
                     active INTEGER NOT NULL DEFAULT 1,
                     avatar_mime TEXT,
                     avatar_data TEXT,
+                    avatar_updated_at TEXT,
                     created_at TEXT NOT NULL
                 )
                 """,
@@ -238,6 +240,7 @@ def ensure_user_columns(conn):
         DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE")
         DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT")
         DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data TEXT")
+        DB.execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_updated_at TEXT")
         return
     columns = {row["name"] for row in DB.rows(DB.execute(conn, "PRAGMA table_info(users)"))}
     if "active" not in columns:
@@ -246,6 +249,8 @@ def ensure_user_columns(conn):
         DB.execute(conn, "ALTER TABLE users ADD COLUMN avatar_mime TEXT")
     if "avatar_data" not in columns:
         DB.execute(conn, "ALTER TABLE users ADD COLUMN avatar_data TEXT")
+    if "avatar_updated_at" not in columns:
+        DB.execute(conn, "ALTER TABLE users ADD COLUMN avatar_updated_at TEXT")
 
 
 def ensure_result_audit_table(conn):
@@ -336,17 +341,40 @@ def ensure_early_final_table(conn):
             )
             """,
         )
-    ensure_early_final_runner_up_column(conn)
+    ensure_early_final_columns(conn)
     DB.execute(conn, "CREATE INDEX IF NOT EXISTS idx_early_final_user ON early_final_predictions(user_id)")
 
 
-def ensure_early_final_runner_up_column(conn):
+def table_columns(conn, table):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise ValueError("Nome de tabela inválido.")
     if DB.is_postgres:
-        DB.execute(conn, "ALTER TABLE early_final_predictions ADD COLUMN IF NOT EXISTS runner_up TEXT")
-    else:
-        columns = {row["name"] for row in DB.rows(DB.execute(conn, "PRAGMA table_info(early_final_predictions)"))}
-        if "runner_up" not in columns:
-            DB.execute(conn, "ALTER TABLE early_final_predictions ADD COLUMN runner_up TEXT")
+        rows = DB.rows(
+            DB.execute(
+                conn,
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = ?
+                """,
+                (table,),
+            )
+        )
+        return {row["column_name"] for row in rows}
+    return {row["name"] for row in DB.rows(DB.execute(conn, f"PRAGMA table_info({table})"))}
+
+
+def ensure_early_final_columns(conn):
+    columns = table_columns(conn, "early_final_predictions")
+    for column in ("champion", "runner_up", "finalist_a", "finalist_b"):
+        if column in columns:
+            continue
+        if DB.is_postgres:
+            DB.execute(conn, f"ALTER TABLE early_final_predictions ADD COLUMN IF NOT EXISTS {column} TEXT")
+        else:
+            DB.execute(conn, f"ALTER TABLE early_final_predictions ADD COLUMN {column} TEXT")
+        columns.add(column)
 
     rows = DB.rows(
         DB.execute(
@@ -354,15 +382,31 @@ def ensure_early_final_runner_up_column(conn):
             """
             SELECT id, champion, runner_up, finalist_a, finalist_b
             FROM early_final_predictions
-            WHERE runner_up IS NULL OR runner_up = ''
+            WHERE champion IS NULL OR champion = ''
+               OR runner_up IS NULL OR runner_up = ''
+               OR finalist_a IS NULL OR finalist_a = ''
+               OR finalist_b IS NULL OR finalist_b = ''
             """,
         )
     )
     for row in rows:
-        runner_up = row.get("finalist_a") if row.get("finalist_a") != row.get("champion") else row.get("finalist_b")
+        champion = row.get("champion") or row.get("finalist_a") or row.get("finalist_b") or row.get("runner_up")
+        runner_up = row.get("runner_up")
         if not runner_up:
-            runner_up = row.get("finalist_b") or row.get("finalist_a") or row.get("champion")
-        DB.execute(conn, "UPDATE early_final_predictions SET runner_up = ? WHERE id = ?", (runner_up, row["id"]))
+            runner_up = row.get("finalist_a") if row.get("finalist_a") != champion else row.get("finalist_b")
+        if not runner_up:
+            runner_up = row.get("finalist_b") or row.get("finalist_a") or champion
+        finalist_a = row.get("finalist_a") or champion
+        finalist_b = row.get("finalist_b") or runner_up
+        DB.execute(
+            conn,
+            """
+            UPDATE early_final_predictions
+            SET champion = ?, runner_up = ?, finalist_a = ?, finalist_b = ?
+            WHERE id = ?
+            """,
+            (champion, runner_up, finalist_a, finalist_b, row["id"]),
+        )
 
 
 def normalize_phase(raw_phase):
@@ -577,7 +621,7 @@ def current_user(req):
         user = DB.one(
             DB.execute(
                 conn,
-                "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_data, created_at FROM users WHERE id = ?",
+                "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_updated_at, created_at FROM users WHERE id = ?",
                 (user_id,),
             )
         )
@@ -619,10 +663,11 @@ def public_user(user):
 
 def avatar_url(user):
     mime = user.get("avatar_mime") if user else None
-    data = user.get("avatar_data") if user else None
-    if not mime or not data:
+    user_id = user.get("id") if user else None
+    if not mime or not user_id:
         return None
-    return f"data:{mime};base64,{data}"
+    version = user.get("avatar_updated_at") or user.get("created_at") or "1"
+    return f"/api/users/{user_id}/avatar?v={urllib.parse.quote(str(version))}"
 
 
 def parse_avatar_data_url(value):
@@ -1120,6 +1165,7 @@ def create_user(username, password, avatar):
     username = validate_username(username)
     password = validate_password(password)
     avatar_mime, avatar_data = parse_avatar_data_url(avatar)
+    now = iso_now()
     if len(username) < 3 or len(username) > 40:
         raise ValueError("O nome de usuário deve ter entre 3 e 40 caracteres.")
     if not re.fullmatch(r"[\w\u00C0-\u00FF .'-]+", username):
@@ -1134,9 +1180,9 @@ def create_user(username, password, avatar):
                 """
                 INSERT INTO users (
                     username, username_norm, password_hash, is_admin, active,
-                    avatar_mime, avatar_data, created_at
+                    avatar_mime, avatar_data, avatar_updated_at, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     username,
@@ -1146,7 +1192,8 @@ def create_user(username, password, avatar):
                     True,
                     avatar_mime,
                     avatar_data,
-                    iso_now(),
+                    now,
+                    now,
                 ),
             )
             conn.commit()
@@ -1158,7 +1205,7 @@ def create_user(username, password, avatar):
         return DB.one(
             DB.execute(
                 conn,
-                "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_data, created_at FROM users WHERE username_norm = ?",
+                "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_updated_at, created_at FROM users WHERE username_norm = ?",
                 (normalize_username(username),),
             )
         )
@@ -1186,7 +1233,19 @@ def handle_auth(req, start_response):
         username = normalize_username(body.get("username", ""))
         password = body.get("password", "")
         with DB.connect() as conn:
-            user = DB.one(DB.execute(conn, "SELECT * FROM users WHERE username_norm = ?", (username,)))
+            user = DB.one(
+                DB.execute(
+                    conn,
+                    """
+                    SELECT
+                        id, username, username_norm, password_hash, is_admin, active,
+                        avatar_mime, avatar_updated_at, created_at
+                    FROM users
+                    WHERE username_norm = ?
+                    """,
+                    (username,),
+                )
+            )
         if not user or not verify_password(password, user["password_hash"]):
             return json_error(start_response, "Usuário ou senha inválidos.", 401, "login_invalido")
         user["is_admin"] = boolish(user["is_admin"])
@@ -1215,7 +1274,7 @@ def build_ranking(conn):
                 u.username,
                 u.active,
                 u.avatar_mime,
-                u.avatar_data,
+                u.avatar_updated_at,
                 COUNT(p.id) AS prediction_count,
                 COALESCE(SUM(p.points), 0) AS match_points,
                 COALESCE(MAX(efp.points), 0) AS early_final_points,
@@ -1224,7 +1283,7 @@ def build_ranking(conn):
             LEFT JOIN predictions p ON p.user_id = u.id
             LEFT JOIN early_final_predictions efp ON efp.user_id = u.id
             WHERE u.active = ?
-            GROUP BY u.id, u.username, u.active, u.avatar_mime, u.avatar_data
+            GROUP BY u.id, u.username, u.active, u.avatar_mime, u.avatar_updated_at
             ORDER BY points DESC, prediction_count DESC, u.username ASC
             """,
             (True,),
@@ -1289,7 +1348,7 @@ def build_admin_users(conn):
                 u.is_admin,
                 u.active,
                 u.avatar_mime,
-                u.avatar_data,
+                u.avatar_updated_at,
                 u.created_at,
                 COUNT(p.id) AS prediction_count,
                 COALESCE(SUM(p.points), 0) + COALESCE(MAX(efp.points), 0) AS points,
@@ -1300,7 +1359,7 @@ def build_admin_users(conn):
             FROM users u
             LEFT JOIN predictions p ON p.user_id = u.id
             LEFT JOIN early_final_predictions efp ON efp.user_id = u.id
-            GROUP BY u.id, u.username, u.is_admin, u.active, u.avatar_mime, u.avatar_data, u.created_at
+            GROUP BY u.id, u.username, u.is_admin, u.active, u.avatar_mime, u.avatar_updated_at, u.created_at
             ORDER BY u.username ASC
             """,
         )
@@ -1635,8 +1694,13 @@ def handle_api(req, start_response):
             return error
         body = req.json()
         with DB.connect() as conn:
+            changed_at = iso_now()
             if body.get("clear"):
-                DB.execute(conn, "UPDATE users SET avatar_mime = NULL, avatar_data = NULL WHERE id = ?", (user["id"],))
+                DB.execute(
+                    conn,
+                    "UPDATE users SET avatar_mime = NULL, avatar_data = NULL, avatar_updated_at = ? WHERE id = ?",
+                    (changed_at, user["id"]),
+                )
             else:
                 try:
                     mime, encoded = parse_avatar_data_url(body.get("avatar"))
@@ -1644,20 +1708,47 @@ def handle_api(req, start_response):
                     return json_error(start_response, str(exc), 400, "avatar_invalido")
                 DB.execute(
                     conn,
-                    "UPDATE users SET avatar_mime = ?, avatar_data = ? WHERE id = ?",
-                    (mime, encoded, user["id"]),
+                    "UPDATE users SET avatar_mime = ?, avatar_data = ?, avatar_updated_at = ? WHERE id = ?",
+                    (mime, encoded, changed_at, user["id"]),
                 )
             conn.commit()
             updated = DB.one(
                 DB.execute(
                     conn,
-                    "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_data, created_at FROM users WHERE id = ?",
+                    "SELECT id, username, username_norm, is_admin, active, avatar_mime, avatar_updated_at, created_at FROM users WHERE id = ?",
                     (user["id"],),
                 )
             )
         updated["is_admin"] = boolish(updated["is_admin"])
         updated["active"] = boolish(updated.get("active", True))
         return json_response(start_response, {"ok": True, "user": public_user(updated), "message": "Perfil atualizado."})
+
+    avatar_match = re.fullmatch(r"/api/users/(\d+)/avatar", req.path)
+    if avatar_match and req.method == "GET":
+        _, error = require_user(req, start_response)
+        if error:
+            return error
+        user_id = int(avatar_match.group(1))
+        with DB.connect() as conn:
+            row = DB.one(
+                DB.execute(
+                    conn,
+                    "SELECT avatar_mime, avatar_data FROM users WHERE id = ?",
+                    (user_id,),
+                )
+            )
+        if not row or not row.get("avatar_mime") or not row.get("avatar_data"):
+            return json_error(start_response, "Foto não encontrada.", 404, "foto_nao_encontrada")
+        try:
+            raw = base64.b64decode(row["avatar_data"], validate=True)
+        except Exception:
+            return json_error(start_response, "Foto inválida.", 500, "foto_invalida")
+        return send(
+            start_response,
+            raw,
+            content_type=row["avatar_mime"],
+            headers=[("Cache-Control", "private, max-age=604800, immutable")],
+        )
 
     if req.path == "/api/matches" and req.method == "GET":
         user = current_user(req)
@@ -1866,9 +1957,10 @@ def handle_api(req, start_response):
                     conn,
                     """
                     SELECT
+                        u.id,
                         u.username,
                         u.avatar_mime,
-                        u.avatar_data,
+                        u.avatar_updated_at,
                         p.id AS prediction_id,
                         p.home_score,
                         p.away_score,
@@ -1887,7 +1979,7 @@ def handle_api(req, start_response):
             row["avatar_url"] = avatar_url(row)
             row.pop("prediction_id", None)
             row.pop("avatar_mime", None)
-            row.pop("avatar_data", None)
+            row.pop("avatar_updated_at", None)
         return json_response(start_response, {"ok": True, "predictions": rows})
 
     save_prediction = re.fullmatch(r"/api/predictions/(\d+)", req.path)

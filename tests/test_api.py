@@ -57,7 +57,10 @@ class ApiClient:
         if "json" in content_type:
             data = json.loads(response_body.decode("utf-8"))
         else:
-            data = response_body.decode("utf-8")
+            try:
+                data = response_body.decode("utf-8")
+            except UnicodeDecodeError:
+                data = response_body
         return captured["status"], data, dict(captured["headers"])
 
     def get(self, path):
@@ -138,6 +141,23 @@ class ApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertEqual(data["code"], "cadastro_invalido")
+
+    def test_avatar_is_served_by_cacheable_endpoint_not_embedded_in_json(self):
+        player, user = self.register_player()
+
+        self.assertTrue(user["avatar_url"].startswith(f"/api/users/{user['id']}/avatar?v="))
+        self.assertNotIn("data:image", json.dumps(user))
+
+        status, data, headers = player.get(user["avatar_url"])
+        self.assertEqual(status, 200)
+        self.assertIsInstance(data, bytes)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertIn("private", headers["Cache-Control"])
+        self.assertIn("max-age=604800", headers["Cache-Control"])
+
+        status, data, _ = self.admin.get("/api/ranking")
+        self.assertEqual(status, 200, data)
+        self.assertNotIn("data:image", json.dumps(data))
 
     def test_prediction_locks_at_start_and_reveals_after_five_minutes(self):
         player, _ = self.register_player()
@@ -270,6 +290,89 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(users[user_with_final["id"]]["early_final"]["champion"], "Brasil")
         self.assertEqual(users[user_with_final["id"]]["early_final"]["runner_up"], "Argentina")
         self.assertFalse(users[user_missing_final["id"]]["early_final"]["submitted"])
+
+    def test_migrates_early_final_table_with_champion_and_runner_up_only(self):
+        _, user = self.register_player("Legacy Runner", "senha123")
+        now = bolao.iso_now()
+        with bolao.DB.connect() as conn:
+            bolao.DB.execute(conn, "DROP TABLE early_final_predictions")
+            bolao.DB.execute(
+                conn,
+                """
+                CREATE TABLE early_final_predictions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                    champion TEXT NOT NULL,
+                    runner_up TEXT NOT NULL,
+                    points INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+            )
+            bolao.DB.execute(
+                conn,
+                """
+                INSERT INTO early_final_predictions (user_id, champion, runner_up, points, created_at, updated_at)
+                VALUES (?, ?, ?, 0, ?, ?)
+                """,
+                (user["id"], "Brasil", "Argentina", now, now),
+            )
+            conn.commit()
+
+        bolao.init_db()
+
+        with bolao.DB.connect() as conn:
+            columns = bolao.table_columns(conn, "early_final_predictions")
+            row = bolao.DB.one(bolao.DB.execute(conn, "SELECT * FROM early_final_predictions WHERE user_id = ?", (user["id"],)))
+        self.assertIn("finalist_a", columns)
+        self.assertIn("finalist_b", columns)
+        self.assertEqual(row["champion"], "Brasil")
+        self.assertEqual(row["runner_up"], "Argentina")
+        self.assertEqual(row["finalist_a"], "Brasil")
+        self.assertEqual(row["finalist_b"], "Argentina")
+
+        status, data, _ = self.admin.post("/api/auth/login", {"username": "Math", "password": "secret123"})
+        self.assertEqual(status, 200, data)
+
+    def test_migrates_early_final_table_with_legacy_finalists_only(self):
+        _, user = self.register_player("Legacy Finalists", "senha123")
+        now = bolao.iso_now()
+        with bolao.DB.connect() as conn:
+            bolao.DB.execute(conn, "DROP TABLE early_final_predictions")
+            bolao.DB.execute(
+                conn,
+                """
+                CREATE TABLE early_final_predictions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                    champion TEXT NOT NULL,
+                    finalist_a TEXT NOT NULL,
+                    finalist_b TEXT NOT NULL,
+                    points INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+            )
+            bolao.DB.execute(
+                conn,
+                """
+                INSERT INTO early_final_predictions (user_id, champion, finalist_a, finalist_b, points, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+                """,
+                (user["id"], "Brasil", "Brasil", "Argentina", now, now),
+            )
+            conn.commit()
+
+        bolao.init_db()
+
+        with bolao.DB.connect() as conn:
+            row = bolao.DB.one(bolao.DB.execute(conn, "SELECT * FROM early_final_predictions WHERE user_id = ?", (user["id"],)))
+        self.assertEqual(row["champion"], "Brasil")
+        self.assertEqual(row["runner_up"], "Argentina")
+        self.assertEqual(row["finalist_a"], "Brasil")
+        self.assertEqual(row["finalist_b"], "Argentina")
 
     def test_knockout_draw_does_not_require_advancing_team(self):
         player, user = self.register_player()

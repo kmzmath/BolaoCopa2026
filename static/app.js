@@ -16,6 +16,8 @@ const state = {
   resultDrafts: new Map(),
   publicPredictions: new Map(),
   serverOffsetMs: 0,
+  lastLoadedAt: 0,
+  loadingAll: false,
   details: {
     matchId: null,
     tab: "predictions",
@@ -346,10 +348,14 @@ function bindUi() {
   }, 30000);
 
   setInterval(() => {
-    if (state.user && !isEditing()) {
-      loadAll(false);
-    }
-  }, 60000);
+    refreshIfStale(10 * 60 * 1000);
+  }, 10 * 60 * 1000);
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshIfStale(2 * 60 * 1000);
+  });
+
+  window.addEventListener("focus", () => refreshIfStale(2 * 60 * 1000));
 }
 
 async function boot() {
@@ -414,12 +420,25 @@ function setAuthMode(mode) {
 }
 
 async function loadAll(withToast = false) {
+  if (state.loadingAll) return;
+  state.loadingAll = true;
   const jobs = [loadMatches(false), loadRanking(false), loadEarlyFinal(false)];
   if (state.user?.is_admin) {
     jobs.push(loadAdminUsers(false), loadResultAudits(false));
   }
-  await Promise.all(jobs);
-  if (withToast) showToast("Dados atualizados.");
+  try {
+    await Promise.all(jobs);
+    state.lastLoadedAt = Date.now();
+    if (withToast) showToast("Dados atualizados.");
+  } finally {
+    state.loadingAll = false;
+  }
+}
+
+function refreshIfStale(maxAgeMs) {
+  if (!state.user || state.loadingAll || document.hidden || isEditing()) return;
+  if (Date.now() - state.lastLoadedAt < maxAgeMs) return;
+  loadAll(false).catch((error) => showToast(error.message, "error"));
 }
 
 async function loadMatches() {
@@ -1039,7 +1058,7 @@ async function openDetails(matchId) {
   const match = state.matches.find((item) => item.id === matchId);
   if (!match) return;
   try {
-    if (match.public_predictions_visible) {
+    if (publicPredictionsVisible(match)) {
       const data = await api(`/api/matches/${matchId}/predictions`);
       state.publicPredictions.set(matchId, data.predictions);
     }
@@ -1100,7 +1119,7 @@ function normalizePublicPredictions(rows = []) {
 }
 
 function detailsPredictions(match, rows) {
-  if (!match.public_predictions_visible) {
+  if (!publicPredictionsVisible(match)) {
     return detailsHiddenMessage(match);
   }
   if (!rows.length) {
@@ -1114,7 +1133,7 @@ function detailsPredictions(match, rows) {
 }
 
 function detailsStats(match, rows) {
-  if (!match.public_predictions_visible) {
+  if (!publicPredictionsVisible(match)) {
     return detailsHiddenMessage(match);
   }
   rows = rows.filter((row) => row.has_prediction !== false);
@@ -1738,6 +1757,10 @@ function currentStatus(match) {
 
 function isLocked(match) {
   return new Date(match.start_at) <= getNow();
+}
+
+function publicPredictionsVisible(match) {
+  return getNow().getTime() >= new Date(match.start_at).getTime() + 5 * 60 * 1000;
 }
 
 function getNow() {
