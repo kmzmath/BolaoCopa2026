@@ -1148,7 +1148,7 @@ main {
 
 .breakdown-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
@@ -1156,16 +1156,26 @@ main {
   background: rgba(255, 255, 255, 0.035);
 }
 
-.breakdown-row span {
+.breakdown-label {
   color: var(--soft);
   font-weight: 800;
   overflow-wrap: anywhere;
 }
 
-.breakdown-row strong {
+.breakdown-formula {
   justify-self: end;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.breakdown-rule-points,
+.breakdown-count,
+.breakdown-total {
   color: #d8bcff;
-  font-size: 1.05rem;
+  font-size: 1.08rem;
+  font-weight: 950;
 }
 
 .breakdown-row.special {
@@ -1221,6 +1231,15 @@ main {
   width: 40px;
   min-width: 40px;
   padding: 0;
+}
+
+#avatar-modal [data-close-avatar] span {
+  font-size: 0;
+}
+
+#avatar-modal [data-close-avatar] span::before {
+  content: "X";
+  font-size: 1rem;
 }
 
 .details-tabs {
@@ -1288,7 +1307,8 @@ main {
 
 .details-list {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .details-warning {
@@ -1310,10 +1330,42 @@ main {
 }
 
 .details-list .public-prediction {
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  min-height: 56px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  min-height: 46px;
+  gap: 7px;
+  padding: 8px;
   border: 0;
   background: #242424;
+}
+
+.prediction-player {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.prediction-player strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.prediction-player span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 850;
+}
+
+.details-list .user-avatar {
+  width: 30px;
+  height: 30px;
+  font-size: 0.68rem;
 }
 
 .user-avatar {
@@ -1331,6 +1383,7 @@ main {
 
 .prediction-score {
   color: #a855ff;
+  font-size: 0.92rem;
   font-weight: 950;
   white-space: nowrap;
 }
@@ -1979,8 +2032,15 @@ th:first-child {
   }
 
   .breakdown-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
     padding: 7px 8px;
     font-size: 0.88rem;
+  }
+
+  .breakdown-formula {
+    justify-self: start;
+    white-space: normal;
   }
 
   .modal {
@@ -2012,14 +2072,33 @@ th:first-child {
     padding: 12px;
   }
 
+  .details-list {
+    gap: 7px;
+  }
+
   .details-list .public-prediction {
-    grid-template-columns: 34px minmax(0, 1fr) auto;
-    gap: 8px;
-    padding: 9px;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    gap: 5px;
+    min-height: 43px;
+    padding: 7px 6px;
+  }
+
+  .prediction-player strong {
+    font-size: 0.8rem;
+  }
+
+  .prediction-player span {
+    font-size: 0.56rem;
+  }
+
+  .details-list .user-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 0.62rem;
   }
 
   .prediction-score {
-    font-size: 0.92rem;
+    font-size: 0.84rem;
   }
 
   .admin-user-main {
@@ -2110,6 +2189,33 @@ th:first-child {
     min-height: 38px;
     padding-inline: 3px;
     font-size: 0.7rem;
+  }
+
+  .details-list {
+    gap: 6px;
+  }
+
+  .details-list .public-prediction {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    gap: 4px;
+    padding: 7px 5px;
+  }
+
+  .prediction-player strong {
+    font-size: 0.74rem;
+  }
+
+  .prediction-player span {
+    font-size: 0.52rem;
+  }
+
+  .details-list .user-avatar {
+    width: 26px;
+    height: 26px;
+  }
+
+  .details-list .prediction-score {
+    font-size: 0.78rem;
   }
 
   .score-row {

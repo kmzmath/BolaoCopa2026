@@ -1027,7 +1027,7 @@ def recalc_match_points(conn, match_id):
     for prediction in predictions:
         points = score_prediction(prediction, match)
         total_points += points
-        DB.execute(conn, "UPDATE predictions SET points = ?, updated_at = ? WHERE id = ?", (points, iso_now(), prediction["id"]))
+        DB.execute(conn, "UPDATE predictions SET points = ? WHERE id = ?", (points, prediction["id"]))
     return {"predictions": len(predictions), "points": total_points}
 
 
@@ -1050,13 +1050,12 @@ def recalc_all_points(conn):
             """,
         )
     )
-    changed_at = iso_now()
     changed = 0
     for row in rows:
         points = score_prediction(row, row)
         if int(row.get("points") or 0) == points:
             continue
-        DB.execute(conn, "UPDATE predictions SET points = ?, updated_at = ? WHERE id = ?", (points, changed_at, row["id"]))
+        DB.execute(conn, "UPDATE predictions SET points = ? WHERE id = ?", (points, row["id"]))
         changed += 1
     return changed
 
@@ -2031,7 +2030,7 @@ def handle_api(req, start_response):
                 """,
                 (changed_at, match_id),
             )
-            DB.execute(conn, "UPDATE predictions SET points = 0, updated_at = ? WHERE match_id = ?", (changed_at, match_id))
+            DB.execute(conn, "UPDATE predictions SET points = 0 WHERE match_id = ?", (match_id,))
             early_final_changed = recalc_all_early_final_points(conn)
             conn.commit()
         return json_response(

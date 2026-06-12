@@ -323,6 +323,7 @@ function bindUi() {
   $("#panel-admin").addEventListener("click", handleAdminPanelClick);
   $("#details-modal").addEventListener("click", handleDetailsClick);
   $("#avatar-modal").addEventListener("click", handleAvatarModalClick);
+  $("#avatar-modal [data-close-avatar] span").textContent = "X";
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -939,7 +940,10 @@ function publicPredictionRow(row, match) {
   return `
     <div class="public-prediction">
       ${avatarHtml(row, "avatar user-avatar")}
-      <strong>${escapeHtml(row.username)}</strong>
+      <div class="prediction-player">
+        <strong>${escapeHtml(row.username)}</strong>
+        <span>Atualizado em ${formatDateTime(row.updated_at)}</span>
+      </div>
       <span class="prediction-score">${row.home_score} × ${row.away_score}</span>
     </div>
   `;
@@ -1276,24 +1280,40 @@ function rankingBreakdown(row) {
         .map(
           (special) => `
             <div class="breakdown-row special">
-              <span>${escapeHtml(special.label)}</span>
-              <strong>${special.points || 0}</strong>
+              <span class="breakdown-label">${escapeHtml(special.label)}</span>
+              <span class="breakdown-formula">
+                Total: <strong class="breakdown-total">${special.points || 0}pts</strong>
+              </span>
             </div>
           `
         )
         .join("")}
       ${rules
         .map(
-          (rule) => `
-            <div class="breakdown-row">
-              <span>${escapeHtml(rule.label)}</span>
-              <strong>${rule.count || 0}</strong>
-            </div>
-          `
+          (rule) => rankingRuleBreakdownRow(rule)
         )
         .join("")}
     </div>
   `;
+}
+
+function rankingRuleBreakdownRow(rule) {
+  const count = Number(rule.count || 0);
+  const rulePoints = Number(rule.points || 0);
+  const total = rulePoints * count;
+  const palpiteLabel = count === 1 ? "palpite" : "palpites";
+  return `
+    <div class="breakdown-row">
+      <span class="breakdown-label">${escapeHtml(rule.label)}</span>
+      <span class="breakdown-formula">
+        <strong class="breakdown-rule-points">${formatRulePoints(rulePoints)}</strong> * <strong class="breakdown-count">${count}</strong> ${palpiteLabel} = <strong class="breakdown-total">${formatRulePoints(total)}</strong>
+      </span>
+    </div>
+  `;
+}
+
+function formatRulePoints(points) {
+  return `${points}pts`;
 }
 
 function renderAdmin() {
@@ -1387,6 +1407,27 @@ function renderAdminFinal() {
       ${adminFinalList("Faltam colocar a Final", missing, false)}
     </div>
   `;
+  normalizeAdminFinalCopy(container, submitted, missing);
+}
+
+function normalizeAdminFinalCopy(container, submitted, missing) {
+  const headings = $$(".admin-final-list-head strong", container);
+  if (headings[0]) headings[0].textContent = "J\u00e1 colocaram a Final";
+  if (headings[1]) headings[1].textContent = "Faltam colocar a Final";
+
+  const emptyStates = $$(".admin-final-list .empty-state", container);
+  if (!submitted.length && emptyStates[0]) emptyStates[0].textContent = "Ningu\u00e9m enviou ainda.";
+  if (!missing.length && emptyStates.at(-1)) emptyStates.at(-1).textContent = "Todos os participantes ativos enviaram.";
+
+  $$(".admin-final-row", container).forEach((row) => {
+    if (!row.querySelector(".admin-final-picks")) {
+      const status = $(".admin-final-row > div span", row);
+      if (status) status.textContent = "Ainda n\u00e3o salvou";
+      return;
+    }
+    const championLabel = $(".admin-final-pick small", row);
+    if (championLabel) championLabel.textContent = "Campe\u00e3o";
+  });
 }
 
 function adminFinalList(title, users, submitted) {

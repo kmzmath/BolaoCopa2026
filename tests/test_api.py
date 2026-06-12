@@ -112,6 +112,15 @@ class ApiTest(unittest.TestCase):
             )
             conn.commit()
 
+    def set_all_match_starts(self, when):
+        with bolao.DB.connect() as conn:
+            bolao.DB.execute(
+                conn,
+                "UPDATE matches SET start_at = ?, status = 'agendado', result_home = NULL, result_away = NULL, penalty_winner = NULL",
+                (when.isoformat(timespec="minutes"),),
+            )
+            conn.commit()
+
     def register_player(self, username="Jogador Teste", password="senha123"):
         client = ApiClient()
         status, data, _ = client.post(
@@ -157,12 +166,24 @@ class ApiTest(unittest.TestCase):
         match_id = self.first_match_id()
         self.set_match_start(match_id, bolao.now_brasilia() + timedelta(hours=2))
         player.post(f"/api/predictions/{match_id}", {"home_score": 2, "away_score": 1})
+        prediction_updated_at = "2026-06-01T10:11:12-03:00"
+        with bolao.DB.connect() as conn:
+            bolao.DB.execute(
+                conn,
+                "UPDATE predictions SET updated_at = ? WHERE user_id = ? AND match_id = ?",
+                (prediction_updated_at, user["id"], match_id),
+            )
+            conn.commit()
 
         status, data, _ = self.admin.post(
             f"/api/admin/matches/{match_id}/result",
             {"result_home": 2, "result_away": 1},
         )
         self.assertEqual(status, 200, data)
+        status, data, _ = self.admin.get(f"/api/matches/{match_id}/predictions")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["predictions"][0]["updated_at"], prediction_updated_at)
+
         status, data, _ = self.admin.get("/api/ranking")
         player_rank = next(row for row in data["ranking"] if row["id"] == user["id"])
         self.assertEqual(player_rank["points"], 6)
@@ -185,7 +206,7 @@ class ApiTest(unittest.TestCase):
         player, user = self.register_player()
         first_match = self.first_match_id()
         final_match = self.final_match_id()
-        self.set_match_start(first_match, bolao.now_brasilia() + timedelta(hours=2))
+        self.set_all_match_starts(bolao.now_brasilia() + timedelta(hours=2))
 
         status, data, _ = player.get("/api/early-final")
         self.assertEqual(status, 200, data)
@@ -230,8 +251,7 @@ class ApiTest(unittest.TestCase):
     def test_admin_users_show_early_final_submitted_and_missing(self):
         player_with_final, user_with_final = self.register_player("Com Final", "senha123")
         _, user_missing_final = self.register_player("Sem Final", "senha123")
-        first_match = self.first_match_id()
-        self.set_match_start(first_match, bolao.now_brasilia() + timedelta(hours=2))
+        self.set_all_match_starts(bolao.now_brasilia() + timedelta(hours=2))
 
         status, data, _ = player_with_final.post(
             "/api/early-final",
