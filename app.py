@@ -1865,17 +1865,27 @@ def handle_api(req, start_response):
                 DB.execute(
                     conn,
                     """
-                    SELECT u.username, u.avatar_mime, u.avatar_data, p.home_score, p.away_score, p.points, p.updated_at
-                    FROM predictions p
-                    JOIN users u ON u.id = p.user_id
-                    WHERE p.match_id = ?
-                    ORDER BY u.username ASC
+                    SELECT
+                        u.username,
+                        u.avatar_mime,
+                        u.avatar_data,
+                        p.id AS prediction_id,
+                        p.home_score,
+                        p.away_score,
+                        p.points,
+                        p.updated_at
+                    FROM users u
+                    LEFT JOIN predictions p ON p.user_id = u.id AND p.match_id = ?
+                    WHERE u.active = ?
+                    ORDER BY CASE WHEN p.id IS NULL THEN 1 ELSE 0 END, u.username ASC
                     """,
-                    (match_id,),
+                    (match_id, True),
                 )
             )
         for row in rows:
+            row["has_prediction"] = row.get("prediction_id") is not None
             row["avatar_url"] = avatar_url(row)
+            row.pop("prediction_id", None)
             row.pop("avatar_mime", None)
             row.pop("avatar_data", None)
         return json_response(start_response, {"ok": True, "predictions": rows})

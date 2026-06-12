@@ -1354,12 +1354,12 @@ main {
 
 .prediction-player span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  white-space: normal;
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.58rem;
   font-weight: 850;
+  line-height: 1.12;
 }
 
 .details-list .user-avatar {
@@ -1386,6 +1386,24 @@ main {
   font-size: 0.92rem;
   font-weight: 950;
   white-space: nowrap;
+}
+
+.public-prediction.missing-prediction {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  opacity: 0.72;
+}
+
+.missing-prediction .avatar,
+.missing-prediction .prediction-player strong,
+.missing-prediction .prediction-player span {
+  color: #7f8897;
+}
+
+.missing-prediction .prediction-score {
+  color: #8b94a3;
+  font-size: 0.74rem;
+  font-weight: 950;
 }
 
 .stats-block {
@@ -2088,7 +2106,7 @@ th:first-child {
   }
 
   .prediction-player span {
-    font-size: 0.56rem;
+    font-size: 0.52rem;
   }
 
   .details-list .user-avatar {
@@ -2099,6 +2117,10 @@ th:first-child {
 
   .prediction-score {
     font-size: 0.84rem;
+  }
+
+  .missing-prediction .prediction-score {
+    font-size: 0.64rem;
   }
 
   .admin-user-main {
@@ -2206,7 +2228,7 @@ th:first-child {
   }
 
   .prediction-player span {
-    font-size: 0.52rem;
+    font-size: 0.49rem;
   }
 
   .details-list .user-avatar {
@@ -2216,6 +2238,10 @@ th:first-child {
 
   .details-list .prediction-score {
     font-size: 0.78rem;
+  }
+
+  .details-list .missing-prediction .prediction-score {
+    font-size: 0.58rem;
   }
 
   .score-row {
@@ -2291,12 +2317,12 @@ th:first-child {
   }
 
   .details-list .public-prediction {
-    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-columns: 26px minmax(0, 1fr) auto;
   }
 
   .details-list .prediction-score {
-    grid-column: 2;
-    justify-self: start;
+    grid-column: auto;
+    justify-self: end;
   }
 
   .admin-tabs {

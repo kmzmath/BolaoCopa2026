@@ -937,12 +937,14 @@ function resultLine(match) {
 }
 
 function publicPredictionRow(row, match) {
+  const hasPrediction = row.has_prediction !== false;
+  const updatedLine = hasPrediction ? `Atualizado em ${formatDateTime(row.updated_at)}` : "Aguardando palpite";
   return `
-    <div class="public-prediction">
+    <div class="public-prediction ${hasPrediction ? "" : "missing-prediction"}">
       ${avatarHtml(row, "avatar user-avatar")}
       <div class="prediction-player">
         <strong>${escapeHtml(row.username)}</strong>
-        <span>Atualizado em ${formatDateTime(row.updated_at)}</span>
+        <span>${escapeHtml(updatedLine)}</span>
       </div>
       <span class="prediction-score">${row.home_score} × ${row.away_score}</span>
     </div>
@@ -1037,7 +1039,7 @@ async function openDetails(matchId) {
   const match = state.matches.find((item) => item.id === matchId);
   if (!match) return;
   try {
-    if (match.public_predictions_visible && !state.publicPredictions.has(matchId)) {
+    if (match.public_predictions_visible) {
       const data = await api(`/api/matches/${matchId}/predictions`);
       state.publicPredictions.set(matchId, data.predictions);
     }
@@ -1082,7 +1084,19 @@ function renderDetailsModal() {
     </div>
     ${state.details.tab === "stats" ? detailsStats(match, rows) : detailsPredictions(match, rows)}
   `;
+  normalizePublicPredictions(rows);
   modal.classList.remove("hidden");
+}
+
+function normalizePublicPredictions(rows = []) {
+  $$(".details-list .public-prediction .prediction-score").forEach((element, index) => {
+    const row = rows[index];
+    if (!row || row.has_prediction === false) {
+      element.textContent = "Sem palpite";
+      return;
+    }
+    element.textContent = `${row.home_score} \u00d7 ${row.away_score}`;
+  });
 }
 
 function detailsPredictions(match, rows) {
@@ -1103,6 +1117,7 @@ function detailsStats(match, rows) {
   if (!match.public_predictions_visible) {
     return detailsHiddenMessage(match);
   }
+  rows = rows.filter((row) => row.has_prediction !== false);
   if (!rows.length) {
     return `<div class="empty-state">Ainda não há estatísticas para esta partida.</div>`;
   }

@@ -141,6 +141,7 @@ class ApiTest(unittest.TestCase):
 
     def test_prediction_locks_at_start_and_reveals_after_five_minutes(self):
         player, _ = self.register_player()
+        self.register_player("Aaa Sem Palpite", "senha123")
         match_id = self.first_match_id()
         self.set_match_start(match_id, bolao.now_brasilia() + timedelta(hours=2))
 
@@ -159,7 +160,9 @@ class ApiTest(unittest.TestCase):
         self.set_match_start(match_id, bolao.now_brasilia() - timedelta(minutes=6))
         status, data, _ = player.get(f"/api/matches/{match_id}/predictions")
         self.assertEqual(status, 200, data)
-        self.assertEqual(len(data["predictions"]), 1)
+        self.assertEqual(sum(1 for row in data["predictions"] if row["has_prediction"]), 1)
+        first_missing = next(index for index, row in enumerate(data["predictions"]) if not row["has_prediction"])
+        self.assertTrue(all(not row["has_prediction"] for row in data["predictions"][first_missing:]))
 
     def test_result_edit_recalculates_ranking_and_records_audit(self):
         player, user = self.register_player()
